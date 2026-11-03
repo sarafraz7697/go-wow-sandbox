@@ -60,9 +60,14 @@ func CharacterScreenPacket(p world.Packet) (*world.Packet, error) {
 		r.CString(12)
 		r.Bytes(9)                                                                  // race/class/gender, appearance and outfit id
 		response = world.Packet{Opcode: op.SMSG_CHAR_CREATE, Payload: []byte{0x33}} // disabled
+
+	// CMSG_CHAR_DELETE is handled by the dedicated deleteCharacter handler
+	// before reaching this stateless fallback. If it ever reaches here,
+	// return CHAR_DELETE_FAILED (0x3C), never 0x49 (which is
+	// CHAR_LOGIN_LOCKED_BY_BILLING and shows "contact support").
 	case op.CMSG_CHAR_DELETE:
 		r.Uint64()
-		response = world.Packet{Opcode: op.SMSG_CHAR_DELETE, Payload: []byte{0x3c}}
+		response = world.Packet{Opcode: op.SMSG_CHAR_DELETE, Payload: []byte{0x3C}}
 	case op.CMSG_PLAYER_LOGIN:
 		r.Uint64()
 		response = world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x46}}

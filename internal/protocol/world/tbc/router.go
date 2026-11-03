@@ -145,9 +145,13 @@ func (h *Handler) newRouter() *Router {
 	stateless := func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
 		return codec.CharacterScreenPacket(p)
 	}
-	for _, opcode := range []uint32{op.CMSG_CHAR_DELETE, op.CMSG_REALM_SPLIT} {
-		r.routes[opcode] = route{[]State{StateAuthed}, stateless}
-	}
+	r.routes[op.CMSG_CHAR_DELETE] = route{[]State{StateAuthed}, func(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if err := check(ctx, s); err != nil {
+			return nil, err
+		}
+		return h.deleteCharacter(ctx, s.account, p, s.log)
+	}}
+	r.routes[op.CMSG_REALM_SPLIT] = route{[]State{StateAuthed}, stateless}
 	live := []State{StateAuthed, StateLoggingIn, StateInWorld, StateLoggingOut}
 	r.routes[op.CMSG_VOICE_SESSION_ENABLE] = route{live, stateless}
 	for _, opcode := range []uint32{op.CMSG_OPT_OUT_OF_LOOT, op.CMSG_SET_TAXI_BENCHMARK_MODE, op.CMSG_SET_ACTIVE_VOICE_CHANNEL} {

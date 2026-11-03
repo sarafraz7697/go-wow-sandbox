@@ -280,6 +280,13 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		// Without rest-area geometry or GM policy, use the normal 20-second path.
 		s.logoutAt = time.Now().Add(20 * time.Second)
 		s.log.Debug("logout countdown started", "guid", s.player.GUID)
+		// Reference: HandleLogoutRequestOpcode sits the player, roots and stuns
+		// so the logout countdown animation plays and the client cannot move.
+		// We send all three changes in one partial UPDATE_OBJECT. On cancel or
+		// movement-cancelled logout, we revert with stand + no stun.
+		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateSit, codec.UnitFlagStunned()); e == nil {
+			_ = s.send(upd)
+		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_RESPONSE, Payload: make([]byte, 5)}, nil
 	}}
 	router.routes[op.CMSG_LOGOUT_CANCEL] = route{[]State{StateLoggingOut, StateInWorld}, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
@@ -290,6 +297,12 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		if s.state == StateLoggingOut {
 			if e := s.transition(StateInWorld); e != nil {
 				return nil, e
+			}
+			// Stand the player back up and clear the stun flag.
+			if s.player != nil {
+				if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand, 0); e == nil {
+					_ = s.send(upd)
+				}
 			}
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
@@ -463,6 +476,10 @@ func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packe
 			return nil, err
 		}
 		s.logoutAt = time.Time{}
+		// Stand the player back up and clear the stun flag.
+		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand, 0); e == nil {
+			_ = s.send(upd)
+		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
 	}
 	return nil, nil

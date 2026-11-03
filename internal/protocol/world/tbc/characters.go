@@ -18,6 +18,12 @@ type CharacterStore interface {
 	List(context.Context, uint64) ([]character.Summary, error)
 }
 
+// CharacterDeleter is the application port used by the delete handler.
+// Implemented by application/character/delete.Service; not by SQL directly.
+type CharacterDeleter interface {
+	Delete(context.Context, uint64, uint32) error
+}
+
 // HANDLER_ORCHESTRATION_PATCH
 // characterList orchestrates only: load summaries -> encode enum packet.
 // Omitted rows are encode failures (missing static data), not domain policy.

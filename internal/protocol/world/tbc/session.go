@@ -26,6 +26,7 @@ type WorldSessionStore interface {
 type Handler struct {
 	Players                     PlayerStore
 	Creator                     CharacterCreator
+	Deleter                     CharacterDeleter
 	Characters                  CharacterStore
 	Data                        *gamedata.Catalog // Immutable startup snapshot, used by later character phases.
 	Store                       WorldSessionStore

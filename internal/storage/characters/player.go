@@ -52,7 +52,19 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		return nil, err
 	}
 	if online != 0 {
-		return nil, fmt.Errorf("%w: character online flag is set", character.ErrPlayerUnavailable)
+		// A stale online flag (e.g. from a crashed process) should not permanently
+		// lock the character. If logout_time is older than the idle timeout, no
+		// live session in this single-process deployment could still own it.
+		// Multi-process deployments need external coordination; this is a
+		// best-effort recovery for the educational single-process setup.
+		var age int64
+		if e := tx.QueryRowContext(ctx, "SELECT COALESCE(UNIX_TIMESTAMP()-logout_time, 0) FROM characters WHERE guid=?", guid).Scan(&age); e != nil {
+			return nil, e
+		}
+		if age < int64(s.idleTimeout.Seconds()) {
+			return nil, fmt.Errorf("%w: character recently online (%ds ago)", character.ErrPlayerUnavailable, age)
+		}
+		// Stale: reclaim below. The UPDATE online=1 will overwrite the stale flag.
 	}
 	if p.Gender > 1 || p.Level == 0 || p.Level > 70 || p.AtLogin & ^uint32(32) != 0 {
 		return nil, character.ErrPlayerUnsupported
@@ -199,4 +211,24 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 		return err
 	}
 	return tx.Commit()
+}
+
+// ResetOnline clears the online flag for one character (by guid) or all
+// characters (guid == 0). It is an admin recovery tool for stale flags left
+// by a crashed process, not part of the normal login/logout path.
+func (s *Store) ResetOnline(ctx context.Context, guid uint32) (int64, error) {
+	if guid == 0 {
+		res, err := s.DB.ExecContext(ctx, "UPDATE characters SET online=0 WHERE online<>0")
+		if err != nil {
+			return 0, err
+		}
+		n, err := res.RowsAffected()
+		return n, err
+	}
+	res, err := s.DB.ExecContext(ctx, "UPDATE characters SET online=0 WHERE guid=? AND online<>0", guid)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return n, err
 }

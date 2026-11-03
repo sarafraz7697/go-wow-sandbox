@@ -11,6 +11,7 @@ import (
 
 	charcreate "wowserver/internal/application/character/create"
 	creationTBC "wowserver/internal/application/character/create/tbc"
+	chardelete "wowserver/internal/application/character/delete"
 	charlist "wowserver/internal/application/character/list"
 	worldlogin "wowserver/internal/application/worldlogin"
 	"wowserver/internal/config"
@@ -51,6 +52,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 		return err
 	}
 	defer chars.DB.Close()
+	chars.SetIdleTimeout(c.IdleTimeout)
 	charCtx, charCancel := context.WithTimeout(ctx, c.RequestTimeout)
 	err = chars.CheckEnumeration(charCtx)
 	if err == nil {
@@ -79,6 +81,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local")
 	h := &tbc.Handler{Store: db, Characters: charlist.NewService(chars), Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
 	h.Creator = charcreate.NewService(profile, creator)
+	h.Deleter = chardelete.NewService(chars)
 	h.Players = worldlogin.NewService(chars)
 	creator.Logger = log
 	server := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: log, Handle: h.Serve}
