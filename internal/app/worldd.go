@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net"
 
-	charapp "wowserver/internal/application/character"
-	creationTBC "wowserver/internal/application/character/tbc"
+	charcreate "wowserver/internal/application/character/create"
+	creationTBC "wowserver/internal/application/character/create/tbc"
+	charlist "wowserver/internal/application/character/list"
+	worldlogin "wowserver/internal/application/worldlogin"
 	"wowserver/internal/config"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
@@ -75,9 +77,9 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 		return fmt.Errorf("world listen: %w", err)
 	}
 	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter stationary world (phase 9)")
-	h := &tbc.Handler{Store: db, Characters: chars, Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
-	h.Creator = charapp.NewService(profile, creator)
-	h.Players = chars
+	h := &tbc.Handler{Store: db, Characters: charlist.NewService(chars), Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
+	h.Creator = charcreate.NewService(profile, creator)
+	h.Players = worldlogin.NewService(chars)
 	creator.Logger = log
 	server := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: log, Handle: h.Serve}
 	return server.Serve(ctx, ln)

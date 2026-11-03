@@ -1,7 +1,8 @@
 // Package tbc builds the deliberately limited build-8606 creation profile.
 package tbc
 
-// PACKAGE_SKELETON_PATCH: profile lives under application/character/tbc
+// DOMAIN_USECASES_PATCH: moved from internal/application/character/tbc
+// to internal/application/character/create/tbc.
 
 import (
 	"context"

@@ -1,6 +1,6 @@
 # Architecture — package boundaries
 
-`DOMAIN_WORLD_SPLIT_PATCH` (slice 3)
+`DOMAIN_USECASES_PATCH` (slice 4)
 
 ## Layout
 
@@ -12,10 +12,17 @@ internal/domain/           pure models + invariants (no SQL, no packets)
   account/                 account model, access decision, login session snapshot
   realm/                   realm model
   character/               character models, creation policy, player snapshot
+  world/                   phase-10 anchor: simulation-owned rules (doc only)
 internal/application/      use-cases / services (consumer-side interfaces only)
-  character/               character creation service
-  character/tbc/           build 8606 creation profile
+  auth/                    phase-10 anchor: login use cases (doc only)
+  character/               temporary compat shim (remove in slice 5)
+  character/create/        character creation use case
+  character/create/tbc/    build 8606 creation profile
+  character/list/          character enumeration use case
   world/                   phase-10 ports: World, Runner, Intent, Event, Outbox
+  worldlogin/              world-entry use cases (AcquirePlayer/ReleasePlayer)
+  chat/                    phase-10 anchor: chat use cases (doc only)
+  movement/                phase-10 anchor: movement use cases (doc only)
 internal/protocol/         codec, framing, session, handlers (orchestration only)
   auth/                    legacy login envelope
   auth/tbc/                build 8606 login: SRP, realms, reconnect
@@ -27,6 +34,7 @@ internal/protocol/         codec, framing, session, handlers (orchestration only
   world/tbc/codec/         pure encode/decode, no I/O
   world/tbc/opcodes/       generated opcode metadata
   world/tbc/updatefields/  generated object update fields
+  world/tbc/routes/        phase-10 route home (doc only)
 internal/world/            phase-10 simulation loop (contract only for now; doc.go)
 internal/storage/          DB adapters implementing application ports
   realmd/                  accounts, sessions, realms
@@ -65,6 +73,39 @@ Forbidden:
 
 Handlers in `protocol/...` only: decode → call application/domain ports → encode.
 
+## Deliberate deviations from the target sketch
+
+- `internal/auth/srp` stays a version-independent library under internal/:
+  storage/realmd consumes it too, and storage must never import protocol.
+- `internal/dbc` stays: DBC file-format parser consumed by gamedata and the
+  creation profile.
+- `internal/testclient`, `protocol/wire`, `protocol/client`,
+  `world/tbc/updatefields`, `storage/sqlutil`: support packages outside the
+  sketched tree; each has a single clear owner layer.
+
+## Use-case ownership (slice 4)
+
+- Character creation: protocol route → `application/character/create.Service`
+  (build profile in `create/tbc`, policy facts in `domain/character`,
+  persistence in `storage/characters`).
+- Character enumeration: protocol route → `application/character/list.Service`
+  (account guard + TBC capacity bound owned by the use case).
+- World entry/exit: protocol route → `application/worldlogin.Service`
+  (acquire/release decisions owned by the use case; the session FSM stays in
+  protocol).
+- Login/auth: unchanged; ban/lock/IP decisions stay in `domain/account`.
+- Phase 10: chat and movement use cases will live in `application/chat` and
+  `application/movement`, their rules in `domain/world`, their packet routes
+  in `protocol/world/tbc/routes`; Intents/Events flow through the
+  `application/world` ports.
+
+## Cleanup backlog (slice 5)
+
+- Remove `application/character/compat.go` once callers import
+  `application/character/create` directly.
+- Remove `protocol/world/tbc/split_compat.go` once the tbc session package
+  imports `frame`/`crypt` subpackages directly.
+
 ## Account & realm flow
 
 - Account model, access decisions, login session snapshot: `internal/domain/account`
@@ -75,13 +116,14 @@ Handlers in `protocol/...` only: decode → call application/domain ports → en
 ## Character flow
 
 - Types / errors / policy facts: `internal/domain/character`
-- `Service.Create`: `internal/application/character`
-- TBC profile (build 8606): `internal/application/character/tbc`
+- Creation use case: `internal/application/character/create` (+ `create/tbc` profile)
+- Enumeration use case: `internal/application/character/list`
 - Persistence: `internal/storage/characters` (+ `mangosone8606` item adapter)
 
 ## World flow (phase 10 sketch)
 
 - Ports and contracts: `internal/application/world` (World, Runner, Intent, Event, Outbox)
+- World-entry use cases: `internal/application/worldlogin`
 - Loop and map state: `internal/world` — one owner goroutine, no shared locks;
   see the package documentation there.
 - Protocol routes decode packets into `Intent` values and `Submit` them; a

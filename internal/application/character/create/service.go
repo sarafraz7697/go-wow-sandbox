@@ -1,4 +1,7 @@
-package character
+package create
+
+// DOMAIN_USECASES_PATCH: moved from internal/application/character. The
+// old package name remains only as a temporary shim (compat.go there).
 
 import (
 	"context"
@@ -7,7 +10,7 @@ import (
 	domain "wowserver/internal/domain/character"
 )
 
-// PACKAGE_SKELETON_PATCH
+// Application service: coordinates profile validation and persistence.
 // Application service: coordinates profile validation and persistence.
 // Domain types live in internal/domain/character; this package must not
 // import protocol or storage implementations (only interfaces).
