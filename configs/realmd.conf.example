@@ -1,0 +1,28 @@
+# Example for the local MaNGOS Docker database. Edit credentials for your environment.
+[network]
+listen = 127.0.0.1:3724
+max_connections = 64
+auth_timeout = 10s
+
+[database.login]
+host = 127.0.0.1
+port = 3306
+name = realmd
+user = root
+password = 'mangos'
+
+[database.characters]
+host = 127.0.0.1
+port = 3306
+name = character1
+user = root
+password = 'mangos'
+
+[database.world]
+host = 127.0.0.1
+port = 3306
+name = mangos1
+user = root
+password = 'mangos'
+[logging]
+level = debug

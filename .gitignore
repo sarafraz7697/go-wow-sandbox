@@ -1,0 +1,11 @@
+/bin/
+*.exe
+*.test
+coverage.out
+*.log
+/configs/*.conf
+.env
+.env.*
+!.env.example
+/docker/init/*.sql
+/dbc/

@@ -1,0 +1,40 @@
+# Phase 7: static startup data and account-owned character enumeration.
+[network]
+listen = 127.0.0.1:8085
+max_connections = 64
+auth_timeout = 10s
+idle_timeout = 2m
+request_timeout = 10s
+
+[world]
+realm_id = 1
+send_queue = 64
+
+[database.login]
+host = 127.0.0.1
+port = 3306
+name = realmd
+user = root
+password = 'mangos'
+
+[logging]
+level = debug
+
+[database.world]
+host = 127.0.0.1
+port = 3306
+name = mangos1
+user = root
+password = 'mangos'
+
+[data]
+dbc_path = dbc
+dbc_locale = 0
+load_timeout = 60s
+
+[database.characters]
+host = 127.0.0.1
+port = 3306
+name = character1
+user = root
+password = 'mangos'

@@ -1,0 +1,20 @@
+name: wow-mangos-sandbox
+services:
+  mangos-db:
+    profiles: [sandbox]
+    image: mysql:5.6.51
+    environment:
+      MYSQL_ROOT_PASSWORD: mangos
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "127.0.0.1:3308:3306"
+    volumes:
+      - sandbox-data:/var/lib/mysql
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysql -uroot -e 'SELECT 1 FROM realmd.realmlist LIMIT 0'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+volumes:
+  sandbox-data:
