@@ -3,6 +3,7 @@ package tbc
 import (
 	"context"
 	"time"
+	"wowserver/internal/application/movement"
 	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/wire"
@@ -85,7 +86,7 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 		return nil, err
 	}
 	restore = false
-	s.log.Info("player entered world", "guid", guid, "map", player.Map, "mode", "stationary")
+	s.log.Info("player entered world", "guid", guid, "map", player.Map, "mode", "local movement")
 	return nil, h.sendTimeSync(s)
 }
 func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
@@ -212,13 +213,15 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		s.log.Debug("logout countdown started", "guid", s.player.GUID)
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_RESPONSE, Payload: make([]byte, 5)}, nil
 	}}
-	router.routes[op.CMSG_LOGOUT_CANCEL] = route{[]State{StateLoggingOut}, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+	router.routes[op.CMSG_LOGOUT_CANCEL] = route{[]State{StateLoggingOut, StateInWorld}, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		if len(p.Payload) != 0 {
 			return nil, codec.ErrWorldPacket
 		}
 		s.logoutAt = time.Time{}
-		if e := s.transition(StateInWorld); e != nil {
-			return nil, e
+		if s.state == StateLoggingOut {
+			if e := s.transition(StateInWorld); e != nil {
+				return nil, e
+			}
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
 	}}
@@ -331,13 +334,34 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	add(op.CMSG_FORCE_MOVE_ROOT_ACK, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		return nil, codec.ValidateRootAck(p.Payload, uint64(s.player.GUID))
 	})
-	// Movement reports can arrive while the client settles onto terrain. Parse
-	// them for framing, but never apply position, flags or client timestamps.
+	// Only the session event loop applies movement. The client renders its own
+	// movement; broadcasting to other players requires the future world loop.
 	for _, opcode := range []uint32{op.MSG_MOVE_HEARTBEAT, op.MSG_MOVE_FALL_LAND, op.CMSG_MOVE_FALL_RESET, op.MSG_MOVE_START_FORWARD, op.MSG_MOVE_START_BACKWARD, op.MSG_MOVE_STOP, op.MSG_MOVE_START_STRAFE_LEFT, op.MSG_MOVE_START_STRAFE_RIGHT, op.MSG_MOVE_STOP_STRAFE, op.MSG_MOVE_START_TURN_LEFT, op.MSG_MOVE_START_TURN_RIGHT, op.MSG_MOVE_STOP_TURN, op.MSG_MOVE_SET_FACING, op.MSG_MOVE_JUMP} {
-		add(opcode, func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
-			return nil, codec.ValidateMovement(p.Payload)
-		})
+		add(opcode, handleMovement)
 	}
+	for _, opcode := range []uint32{op.MSG_MOVE_SET_RUN_MODE, op.MSG_MOVE_SET_WALK_MODE, op.MSG_MOVE_START_PITCH_UP, op.MSG_MOVE_START_PITCH_DOWN, op.MSG_MOVE_STOP_PITCH, op.MSG_MOVE_SET_PITCH, op.MSG_MOVE_START_SWIM, op.MSG_MOVE_STOP_SWIM} {
+		add(opcode, handleMovement)
+	}
+}
+
+func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+	position, err := codec.DecodeMovementPosition(p.Payload)
+	if err != nil {
+		return nil, err
+	}
+	moved := s.player != nil && (position.X != s.player.X || position.Y != s.player.Y || position.Z != s.player.Z)
+	if err = movement.Apply(s.player, position); err != nil {
+		return nil, err
+	}
+	// Movement cancels the pending logout now that the player is not rooted.
+	if s.state == StateLoggingOut && (moved || p.Opcode == op.MSG_MOVE_JUMP) {
+		if err = s.transition(StateInWorld); err != nil {
+			return nil, err
+		}
+		s.logoutAt = time.Time{}
+		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
+	}
+	return nil, nil
 }
 func consume(size int) handlerFunc {
 	return func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {

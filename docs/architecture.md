@@ -118,8 +118,11 @@ Handlers in `protocol/...` only: decode → call application/domain ports → en
 - `application/worldlogin` provides the entry/exit seam. Supported-player
   restrictions currently remain in the storage acquire transaction; extracting
   them must preserve atomic ownership and online-state checks.
-- `world`, `application/chat`, `application/movement`, and the routes package
+- `world`, `application/chat`, and the routes package
   contain contracts/placeholders rather than an implemented simulation.
+- `application/movement` now applies bounded local positions to the session's
+  player snapshot. This is a temporary single-player path owned by the session
+  loop, not the shared world simulation or database movement persistence.
 - The import table above is a summary: `storage/world` also consumes gamedata
   types, the TBC creation profile consumes `dbc`, and SRP is a shared library.
 - Existing external-package storage tests import protocol adapters for

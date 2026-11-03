@@ -7,8 +7,8 @@ import "errors"
 var ErrPlayerUnavailable = errors.New("character unavailable for world login")
 var ErrPlayerUnsupported = errors.New("phase 9 supports living level-1 Human Warriors on map 0 only")
 
-// Player is a session-owned snapshot. No packet or client movement is a trusted
-// source for its position. Phase 9 deliberately has no movement simulation.
+// Player is a session-owned snapshot. Local movement is applied by the movement
+// use case after packet/bounds validation; there is no authoritative simulation.
 type Player struct {
 	Summary
 	Orientation                                  float32

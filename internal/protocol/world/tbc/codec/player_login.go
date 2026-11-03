@@ -95,7 +95,6 @@ func LoginPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([
 	}
 	packets = append(packets, update)
 	add(op.SMSG_INIT_WORLD_STATES, func(w *wire.Writer) { w.Uint32(p.Map); w.Uint32(p.Zone); w.Uint32(0); w.Uint16(0) })
-	add(op.SMSG_FORCE_MOVE_ROOT, func(w *wire.Writer) { w.PackedGUID(uint64(p.GUID)); w.Uint32(0) })
 	return packets, firstErr
 }
 func NameQuery(p *character.Player) (world.Packet, error) {

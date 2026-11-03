@@ -1,5 +1,26 @@
 # World login: protocol coverage and remaining work
 
+## Local movement update
+
+The stationary restriction described in the original audit below has now been
+removed: initial object movement flags no longer contain ROOT, and login no
+longer sends FORCE_MOVE_ROOT. Walking/running, strafing, turning, jumping,
+landing and heartbeat reports are decoded and applied to the session snapshot
+through `application/movement`. Pitch and swim transitions are also consumed
+for client terrain transitions. Transport/flight reports are unsupported.
+
+`domain/world.Position` checks finite values and bounds; this is not terrain,
+collision, speed, fall-damage or anti-cheat simulation. The owning session loop
+updates the snapshot, with no new goroutines. Movement/jumping cancels a pending
+logout; idle heartbeats do not cancel it. Other players do not receive movement
+updates yet. Position is deliberately NOT saved to SQL: reconnect starts from
+the previous saved position until world movement/persistence is implemented.
+
+No tests were added/run and no build/server execution was performed for this
+change. Existing character/login restrictions otherwise remain in place.
+
+## Original login audit
+
 Domain: `application/worldlogin`; build adapter: `protocol/world/tbc` (8606).
 This is a source audit, not a packet capture or a successful client-login claim.
 No tests were written/run and no build/server was executed for this change.

@@ -111,9 +111,9 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 	w.PackedGUID(uint64(p.GUID))
 	w.Uint8(4)
 	w.Uint8(0x71)
-	// Rooted stationary movement snapshot: flags, extra flags, clock, position,
+	// Unrooted movement snapshot: flags, extra flags, clock, position,
 	// fall time, eight movement speeds, then UPDATEFLAG_HIGHGUID's zero word.
-	w.Uint32(0x800)
+	w.Uint32(0)
 	w.Uint8(0)
 	w.Uint32(clock)
 	w.Float32(p.X)

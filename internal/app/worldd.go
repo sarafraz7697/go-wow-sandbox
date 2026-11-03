@@ -76,7 +76,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	if err != nil {
 		return fmt.Errorf("world listen: %w", err)
 	}
-	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter stationary world")
+	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local")
 	h := &tbc.Handler{Store: db, Characters: charlist.NewService(chars), Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
 	h.Creator = charcreate.NewService(profile, creator)
 	h.Players = worldlogin.NewService(chars)

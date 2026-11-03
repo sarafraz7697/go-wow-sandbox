@@ -2,11 +2,12 @@ package codec
 
 import (
 	"math"
+	"wowserver/internal/domain/world"
 	"wowserver/internal/protocol/wire"
 )
 
-// Phase 9 validates the 8606 MovementInfo shape without accepting movement.
-// Movement simulation and authoritative relocation belong to phase 10.
+// ValidateMovement checks the complete build-8606 MovementInfo, including
+// optional jump, pitch and transport sections, without applying game state.
 func ValidateMovement(payload []byte) error {
 	r := wire.NewReader(payload)
 	flags := r.Uint32()
@@ -41,6 +42,24 @@ func ValidateMovement(payload []byte) error {
 		return ErrWorldPacket
 	}
 	return r.Finish()
+}
+
+// DecodeMovementPosition validates the full packet before exposing its pose.
+// Transport-relative coordinates and flight are outside the local movement scope.
+func DecodeMovementPosition(payload []byte) (world.Position, error) {
+	var p world.Position
+	if err := ValidateMovement(payload); err != nil {
+		return p, err
+	}
+	r := wire.NewReader(payload)
+	flags := r.Uint32()
+	if flags&(0x200|0x1000000|0x2000000) != 0 {
+		return p, ErrWorldPacket
+	}
+	r.Uint8()
+	r.Uint32()
+	p.X, p.Y, p.Z, p.Orientation = r.Float32(), r.Float32(), r.Float32(), r.Float32()
+	return p, r.Err()
 }
 func ValidateRootAck(payload []byte, guid uint64) error {
 	r := wire.NewReader(payload)
