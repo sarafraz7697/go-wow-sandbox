@@ -30,7 +30,7 @@ func RunRealmd(ctx context.Context, c config.RealmdConfig, logOutput io.Writer) 
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	logger.Info("realmd listening", "address", ln.Addr(), "phase", 3)
+	logger.Info("realmd listening", "address", ln.Addr())
 	s := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: logger,
 		Handle: (tbc.Handler{Store: db, Realms: db, Sessions: db, Logger: logger,
 			IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}).Serve,

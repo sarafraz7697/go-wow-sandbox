@@ -2,6 +2,11 @@
 
 `DOMAIN_USECASES_PATCH` (slice 4)
 
+Development now follows domains and use cases, not numbered phases. This
+document defines the package boundaries for subsequent work. Phase numbers in
+older documents and comments are historical milestones, not package ownership
+or the current development plan.
+
 ## Layout
 
 ```
@@ -105,6 +110,37 @@ Handlers in `protocol/...` only: decode → call application/domain ports → en
   `application/character/create` directly.
 - Remove `protocol/world/tbc/split_compat.go` once the tbc session package
   imports `frame`/`crypt` subpackages directly.
+
+## Current implementation boundaries
+
+- Auth orchestration still lives in `protocol/auth/tbc`; `application/auth` is
+  a placeholder, not an extracted authentication service yet.
+- `application/worldlogin` provides the entry/exit seam. Supported-player
+  restrictions currently remain in the storage acquire transaction; extracting
+  them must preserve atomic ownership and online-state checks.
+- `world`, `application/chat`, `application/movement`, and the routes package
+  contain contracts/placeholders rather than an implemented simulation.
+- The import table above is a summary: `storage/world` also consumes gamedata
+  types, the TBC creation profile consumes `dbc`, and SRP is a shared library.
+- Existing external-package storage tests import protocol adapters for
+  integration coverage. `scripts/check_imports.py` currently scans tests too,
+  so its production-boundary rules need a deliberate test-package exception
+  before treating that script as an authoritative architecture check.
+
+## Protocol compatibility fixes
+
+- World sessions explicitly accept the two-byte `CMSG_VOICE_SESSION_ENABLE`
+  preferences packet in connected authenticated states, without enabling a
+  voice service or sending a response (as in the local MaNGOS handler).
+  Known unimplemented client commands now use the metadata-gated discard policy
+  in [world-login.md](world-login.md); unknown/disallowed commands still fail
+  closed. The same audit documents pre-login preferences and missing services.
+- Authentication rejection retains the existing build-8606 response bytes.
+  After writing a rejection, the handler waits for client close for at most
+  five seconds, still subject to the transport handshake deadline. It accepts
+  no further authentication or realm requests on that failed connection.
+- These changes have been reviewed in source only; no tests were added/run,
+  and no build, server execution, or client verification was performed.
 
 ## Account & realm flow
 

@@ -12,6 +12,28 @@ func CharacterScreenPacket(p world.Packet) (*world.Packet, error) {
 	r := wire.NewReader(p.Payload)
 	var response world.Packet
 	switch p.Opcode {
+	case op.CMSG_OPT_OUT_OF_LOOT, op.CMSG_SET_TAXI_BENCHMARK_MODE, op.CMSG_SET_ACTIVE_VOICE_CHANNEL:
+		// MaNGOS consumes these preferences without a response. Loot opt-out
+		// activation is explicitly unimplemented there as well.
+		switch p.Opcode {
+		case op.CMSG_OPT_OUT_OF_LOOT:
+			r.Uint32()
+		case op.CMSG_SET_TAXI_BENCHMARK_MODE:
+			r.Uint8()
+		case op.CMSG_SET_ACTIVE_VOICE_CHANNEL:
+			r.Uint32()
+			r.CString(255)
+		}
+		return nil, r.Finish()
+	case op.CMSG_VOICE_SESSION_ENABLE:
+		// Voice and microphone preferences are accepted even without a voice
+		// service, matching MaNGOS. This command has no response.
+		r.Uint8()
+		r.Uint8()
+		if err := r.Finish(); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	case op.CMSG_CHAR_ENUM:
 		response = world.Packet{Opcode: op.SMSG_CHAR_ENUM, Payload: []byte{0}}
 	case op.CMSG_PING:

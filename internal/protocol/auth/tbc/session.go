@@ -10,8 +10,8 @@ import (
 	"net"
 	"time"
 
-	"wowserver/internal/domain/account"
 	"wowserver/internal/auth/srp"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/protocol/auth"
 	"wowserver/internal/protocol/auth/tbc/codec"
 	"wowserver/internal/protocol/client"
@@ -46,7 +46,7 @@ func (h Handler) Serve(ctx context.Context, conn net.Conn) (result error) {
 	trace("login challenge decoded", "build", c.Build, "version", c.Version)
 	fail := func(code byte) error {
 		trace("authentication rejected", "result_code", code)
-		return auth.WriteAll(conn, codec.ChallengeFailure(c.Command, code))
+		return writeRejection(ctx, conn, codec.ChallengeFailure(c.Command, code), trace)
 	}
 	if _, ok := client.Lookup(c.Build, c.Version); !ok {
 		return fail(9)
@@ -72,7 +72,7 @@ func (h Handler) login(ctx context.Context, conn net.Conn, a account.Account, bu
 	*stage = "srp_challenge"
 	exchange, err := srp.New(a.Name, a.Salt, a.Verifier)
 	if err != nil {
-		return auth.WriteAll(conn, codec.ChallengeFailure(0, 8))
+		return writeRejection(ctx, conn, codec.ChallengeFailure(0, 8), trace)
 	}
 	var nonce [16]byte
 	if _, err = io.ReadFull(rand.Reader, nonce[:]); err != nil {
@@ -93,16 +93,16 @@ func (h Handler) login(ctx context.Context, conn net.Conn, a account.Account, bu
 	if err != nil {
 		trace("client proof rejected", "reason", "invalid public value or proof")
 		if err = h.Store.Failed(ctx, a.ID); err != nil {
-			return auth.WriteAll(conn, codec.ProofFailure(8))
+			return writeRejection(ctx, conn, codec.ProofFailure(8), trace)
 		}
-		return auth.WriteAll(conn, codec.ProofFailure(4))
+		return writeRejection(ctx, conn, codec.ProofFailure(4), trace)
 	}
 	trace("client proof verified")
 	*stage = "session_publish"
 	trace("saving session key")
 	if err = h.Store.Publish(ctx, a, key, build, ip); err != nil {
 		trace("session publication failed", "reason", "database write failed or account changed")
-		return auth.WriteAll(conn, codec.ProofFailure(8))
+		return writeRejection(ctx, conn, codec.ProofFailure(8), trace)
 	}
 	trace("session key saved")
 	*stage = "server_proof"

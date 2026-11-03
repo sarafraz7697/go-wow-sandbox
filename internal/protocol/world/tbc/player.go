@@ -17,6 +17,7 @@ type PlayerStore interface {
 }
 
 func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (response *world.Packet, resultErr error) {
+	s.log.Debug("player login requested")
 	r := wire.NewReader(p.Payload)
 	guid := r.Uint64()
 	if err := r.Finish(); err != nil {
@@ -155,12 +156,15 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		if e := r.Finish(); e != nil {
 			return nil, e
 		}
-		if guid != uint64(s.player.GUID) {
+		if s.player == nil || guid != uint64(s.player.GUID) {
 			return nil, nil
 		}
 		result, e := codec.NameQuery(s.player)
 		return &result, e
 	})
+	nameQuery := router.routes[op.CMSG_NAME_QUERY]
+	nameQuery.states = []State{StateAuthed, StateInWorld, StateLoggingOut}
+	router.routes[op.CMSG_NAME_QUERY] = nameQuery
 	add(op.CMSG_ITEM_QUERY_SINGLE, func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
 		id := r.Uint32()

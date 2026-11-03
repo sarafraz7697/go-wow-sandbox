@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
@@ -30,6 +31,7 @@ type transition struct {
 // Session is owned by its event loop. Readers and world workers must not read
 // or mutate state directly. Handler.active remains a separate admission registry.
 type Session struct {
+	unsupportedSeen            map[uint32]bool
 	player                     *character.Player
 	joined, logoutAt, nextSync time.Time
 	syncCounter                uint32
@@ -93,14 +95,14 @@ type Router struct{ routes map[uint32]route }
 func (r *Router) dispatch(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 	entry, ok := r.routes[p.Opcode]
 	if !ok {
-		return nil, codec.ErrWorldPacket
+		return r.unsupported(s, p)
 	}
 	for _, state := range entry.states {
 		if state == s.state {
 			return entry.handle(ctx, s, p)
 		}
 	}
-	return nil, codec.ErrWorldPacket
+	return nil, fmt.Errorf("%w: disallowed opcode=%d state=%d", codec.ErrWorldPacket, p.Opcode, s.state)
 }
 
 // Explicit allowlist: reference opcode metadata is descriptive, not permission
@@ -136,6 +138,10 @@ func (h *Handler) newRouter() *Router {
 		r.routes[opcode] = route{[]State{StateAuthed}, stateless}
 	}
 	live := []State{StateAuthed, StateLoggingIn, StateInWorld, StateLoggingOut}
+	r.routes[op.CMSG_VOICE_SESSION_ENABLE] = route{live, stateless}
+	for _, opcode := range []uint32{op.CMSG_OPT_OUT_OF_LOOT, op.CMSG_SET_TAXI_BENCHMARK_MODE, op.CMSG_SET_ACTIVE_VOICE_CHANNEL} {
+		r.routes[opcode] = route{live, stateless}
+	}
 	r.routes[op.CMSG_KEEP_ALIVE] = route{live, stateless}
 	r.routes[op.CMSG_PING] = route{live, func(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		if err := check(ctx, s); err != nil {
@@ -145,4 +151,37 @@ func (h *Handler) newRouter() *Router {
 	}}
 	h.registerPlayerRoutes(r)
 	return r
+}
+
+// A missing feature is not malformed framing. Discard known client commands
+// only in their reference-approved state, without executing game logic or
+// pretending to have completed the operation. Registered handlers remain strict.
+func (r *Router) unsupported(s *Session, p world.Packet) (*world.Packet, error) {
+	m, known := op.Lookup(p.Opcode)
+	inWorld := s.state == StateInWorld || s.state == StateLoggingOut
+	live := s.state <= StateLoggingOut
+	allowed := false
+	if known && (strings.HasPrefix(m.Name, "CMSG_") || strings.HasPrefix(m.Name, "MSG_")) {
+		switch m.Status {
+		case op.STATUS_AUTHED:
+			allowed = live
+		case op.STATUS_LOGGEDIN, op.STATUS_LOGGEDIN_OR_RECENTLY_LOGGEDOUT:
+			allowed = inWorld
+		case op.STATUS_UNHANDLED:
+			allowed = live
+		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("%w: unsupported or disallowed opcode=%d state=%d", codec.ErrWorldPacket, p.Opcode, s.state)
+	}
+	if s.unsupportedSeen == nil {
+		s.unsupportedSeen = make(map[uint32]bool)
+	}
+	if !s.unsupportedSeen[p.Opcode] {
+		s.unsupportedSeen[p.Opcode] = true
+		if s.log != nil {
+			s.log.Warn("world feature not implemented; packet ignored", "opcode", p.Opcode, "name", m.Name, "state", s.state, "bytes", len(p.Payload))
+		}
+	}
+	return nil, nil
 }
