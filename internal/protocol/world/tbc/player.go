@@ -323,7 +323,20 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		add(opcode, consume(0))
 	}
 	router.routes[op.CMSG_PLAYER_LOGOUT] = route{[]State{StateAuthed, StateInWorld, StateLoggingOut}, consume(0)}
-	add(op.CMSG_ZONEUPDATE, consume(4))
+	add(op.CMSG_ZONEUPDATE, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		r := wire.NewReader(p.Payload)
+		zone := r.Uint32()
+		if e := r.Finish(); e != nil {
+			return nil, e
+		}
+		// The client reports its current zone; trust it within the uint32
+		// range. Map admission and area-trigger teleport are future
+		// world-loop work. Zone 0 is not a valid area; ignore it.
+		if s.player != nil && zone != 0 {
+			s.player.Zone = zone
+		}
+		return nil, nil
+	})
 	add(op.CMSG_SET_SELECTION, consume(8))
 	add(op.CMSG_STANDSTATECHANGE, consume(4))
 	add(op.CMSG_MOVE_TIME_SKIPPED, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {

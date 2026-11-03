@@ -21,7 +21,7 @@ func (s *Store) CheckPlayer(ctx context.Context) error {
 		return fmt.Errorf("character_tutorial must use InnoDB for atomic logout")
 	}
 	return sqlutil.Check(ctx, s.DB, map[string]string{
-		"characters":           "SELECT guid,account,online,orientation,xp,money,health,power2,totaltime,leveltime,logout_time FROM characters",
+		"characters":           "SELECT guid,account,online,orientation,xp,money,health,power2,totaltime,leveltime,logout_time,position_x,position_y,position_z,map,zone FROM characters",
 		"character_homebind":   "SELECT guid,map,zone,position_x,position_y,position_z FROM character_homebind",
 		"character_tutorial":   "SELECT account,tut0,tut1,tut2,tut3,tut4,tut5,tut6,tut7 FROM character_tutorial",
 		"character_spell":      "SELECT guid,spell,active,disabled FROM character_spell",
@@ -162,8 +162,12 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	return p, nil
 }
 
-// ReleasePlayer saves only phase-9 owned values; inventory, spells, money and
-// positions are not rewritten from a partial in-memory representation.
+// ReleasePlayer saves logout metadata, tutorial flags and, when the player
+// entered the world, the current position/map/zone. Inventory, spells, money
+// and health are not rewritten from the partial in-memory representation.
+// Position validation lives in application/movement.Apply; storage trusts
+// the snapshot it receives and only writes coordinates for an entered player,
+// so a login that failed before entry does not overwrite stored coordinates.
 func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *character.Player, seconds uint32) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -174,7 +178,12 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 	if p.Entered {
 		clear = 32
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.GUID, accountID)
+	var result sql.Result
+	if p.Entered {
+		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.GUID, accountID)
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.GUID, accountID)
+	}
 	if err != nil {
 		return err
 	}

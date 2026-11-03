@@ -22,13 +22,13 @@
 
 پروژه آموزشی و تفریحی برای یادگیری Go و بازسازی تدریجی مسیر login تا world کلاینت TBC است. جایگزین کامل سرور C++ یا یک سرور عمومی آماده نیست.
 
-| منبع | قرارداد |
-|---|---|
-| [MaNGOS One](https://github.com/mangosone/server) | رفتار و پروتکل 2.4.3 / build 8606 |
-| commit `b2083578a279aac3a70a2cba8fe710a454324c4e` | مرجع تثبیت‌شدهٔ ورودی‌های opcode و بخشی از پورت |
-| `mangos/realmd@095bc797730669f228d5126f4627b7d2a2e13a8f` | مرجع تاریخی ثبت‌شده برای auth |
-| dump ارسالی `all.sql` و دیتابیس‌های موجود | schema واقعی MaNGOS؛ MySQL 5.6.51 در محیط توسعه |
-| DBC استخراج‌شده با ابزار MaNGOS | دادهٔ کلاینت 2.4.3؛ extractor جدید لازم نیست |
+| منبع                                                     | قرارداد                                         |
+| -------------------------------------------------------- | ----------------------------------------------- |
+| [MaNGOS One](https://github.com/mangosone/server)        | رفتار و پروتکل 2.4.3 / build 8606               |
+| commit `b2083578a279aac3a70a2cba8fe710a454324c4e`        | مرجع تثبیت‌شدهٔ ورودی‌های opcode و بخشی از پورت |
+| `mangos/realmd@095bc797730669f228d5126f4627b7d2a2e13a8f` | مرجع تاریخی ثبت‌شده برای auth                   |
+| dump ارسالی `all.sql` و دیتابیس‌های موجود                | schema واقعی MaNGOS؛ MySQL 5.6.51 در محیط توسعه |
+| DBC استخراج‌شده با ابزار MaNGOS                          | دادهٔ کلاینت 2.4.3؛ extractor جدید لازم نیست    |
 
 در بررسی‌های اخیر، سورس محلی مجاور `../server` و صفحات upstream نیز خوانده شده‌اند. سورس مجاور تغییرات محلی دارد و برابر بودن همهٔ آن با commit تثبیت‌شده ادعا نمی‌شود. برای پورت‌های بعدی، فایل/تابع و revision مرجع باید مشخص شود.
 
@@ -36,23 +36,23 @@
 
 این بخش **diff رفتاری با مرجع** است، نه diff خط‌به‌خط Git.
 
-| دامنه | آنچه وجود دارد | محدودیت یا کار باقی‌مانده |
-|---|---|---|
-| Auth | SRP6، ذخیرهٔ session key، reconnect، ban حساب/IP، locked IP، failed_logins | MFA، Warden، CRC، autoban و تفکیک تمام خطاهای مرجع وجود ندارند |
-| خطای رمز | پاسخ خطای build 8606 و انتظار محدود برای بسته‌شدن اتصال توسط کلاینت | نمایش خطای صحیح در کلاینت بعد از اصلاح هنوز تأیید مستقل نشده |
-| Realm | فهرست، تعداد کاراکتر، دسترسی، build، آدرس محلی/عمومی | population و وضعیت world خودکار مدیریت نمی‌شوند؛ realm ناسازگار حذف می‌شود |
-| World session | auth digest، header crypt، addon response، ping، صف محدود، FSM | admission فقط درون process؛ جایگزینی session و هماهنگی چند process کامل نیست |
-| فهرست کاراکتر | حساب‌محور، ظاهر، تجهیزات از cache، pet برای صفحهٔ انتخاب | cache بازسازی نمی‌شود؛ دادهٔ خراب ممکن است با هشدار از خروجی حذف شود |
-| ساخت کاراکتر | Human Warrior، هر دو جنسیت، دادهٔ شروع و تراکنش کامل | سایر race/classها هنوز برای ساخت فعال نیستند؛ نام فقط ASCII |
-| ورود کاراکتر موجود | race/class معتبر در داده‌ها، هر دو جنسیت، level 1–70، map موجود در DBC | این به معنی پشتیبانی کامل مکانیک همهٔ کلاس‌ها، instance، taxi، مرگ/احیا یا فرم نیست |
-| Inventory هنگام ورود | آیتم، کیف، محتویات، بانک، keyring و self update | عملیات equip/move/use و ذخیرهٔ تغییر inventory پیاده نشده |
-| حرکت | جلو/عقب، strafe، چرخش، walk/run، jump/land و heartbeat | محلی؛ بدون broadcast، collision، terrain، سرعت‌سنجی یا ذخیرهٔ موقعیت |
-| Logout | countdown، cancel، ذخیرهٔ زمان/tutorial، آزادکردن online، پاسخ completion | آخرین اصلاح بسته‌های دیررس هنوز تأیید نشده؛ سیاست instant logout مرجع کامل نیست |
-| Stats | پایه + تجهیزات، HP/Mana، armor/resistances، AP، damage/speed و enchant مستقیم | موتور aura/talent/buff، rating و چندین modifier هنوز ناقص‌اند |
-| Query/UI | self name، item template، time، played time و بعضی پیام‌های تنظیمات | social/ticket فعلاً placeholder؛ mail/raid/guild و queryهای متعدد بدون سرویس‌اند |
-| World مشترک | قراردادهای Intent/Event و مالکیت طراحی شده | loop واقعی، map/grid، visibility، NPC، combat، spell، quest و AI وجود ندارند |
-| مدیریت | `wowctl account create/check` و `realm list/add` | migration خودکار یا `account init` نداریم |
-| نسخه‌های دیگر | مرزبندی protocol/DBC/persistence نسخه‌محور | فقط 8606 فعال است؛ سازگاری خودکار با Classic/WotLK ادعا نمی‌شود |
+| دامنه                | آنچه وجود دارد                                                                | محدودیت یا کار باقی‌مانده                                                           |
+| -------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Auth                 | SRP6، ذخیرهٔ session key، reconnect، ban حساب/IP، locked IP، failed_logins    | MFA، Warden، CRC، autoban و تفکیک تمام خطاهای مرجع وجود ندارند                      |
+| خطای رمز             | پاسخ خطای build 8606 و انتظار محدود برای بسته‌شدن اتصال توسط کلاینت           | نمایش خطای صحیح در کلاینت بعد از اصلاح هنوز تأیید مستقل نشده                        |
+| Realm                | فهرست، تعداد کاراکتر، دسترسی، build، آدرس محلی/عمومی                          | population و وضعیت world خودکار مدیریت نمی‌شوند؛ realm ناسازگار حذف می‌شود          |
+| World session        | auth digest، header crypt، addon response، ping، صف محدود، FSM                | admission فقط درون process؛ جایگزینی session و هماهنگی چند process کامل نیست        |
+| فهرست کاراکتر        | حساب‌محور، ظاهر، تجهیزات از cache، pet برای صفحهٔ انتخاب                      | cache بازسازی نمی‌شود؛ دادهٔ خراب ممکن است با هشدار از خروجی حذف شود                |
+| ساخت کاراکتر         | Human Warrior، هر دو جنسیت، دادهٔ شروع و تراکنش کامل                          | سایر race/classها هنوز برای ساخت فعال نیستند؛ نام فقط ASCII                         |
+| ورود کاراکتر موجود   | race/class معتبر در داده‌ها، هر دو جنسیت، level 1–70، map موجود در DBC        | این به معنی پشتیبانی کامل مکانیک همهٔ کلاس‌ها، instance، taxi، مرگ/احیا یا فرم نیست |
+| Inventory هنگام ورود | آیتم، کیف، محتویات، بانک، keyring و self update                               | عملیات equip/move/use و ذخیرهٔ تغییر inventory پیاده نشده                           |
+| حرکت                 | جلو/عقب، strafe، چرخش، walk/run، jump/land و heartbeat                        | محلی؛ بدون broadcast، collision، terrain، سرعت‌سنجی یا ذخیرهٔ موقعیت                |
+| Logout               | countdown، cancel، ذخیرهٔ زمان/tutorial، آزادکردن online، پاسخ completion     | آخرین اصلاح بسته‌های دیررس هنوز تأیید نشده؛ سیاست instant logout مرجع کامل نیست     |
+| Stats                | پایه + تجهیزات، HP/Mana، armor/resistances، AP، damage/speed و enchant مستقیم | موتور aura/talent/buff، rating و چندین modifier هنوز ناقص‌اند                       |
+| Query/UI             | self name، item template، time، played time و بعضی پیام‌های تنظیمات           | social/ticket فعلاً placeholder؛ mail/raid/guild و queryهای متعدد بدون سرویس‌اند    |
+| World مشترک          | قراردادهای Intent/Event و مالکیت طراحی شده                                    | loop واقعی، map/grid، visibility، NPC، combat، spell، quest و AI وجود ندارند        |
+| مدیریت               | `wowctl account create/check` و `realm list/add`                              | migration خودکار یا `account init` نداریم                                           |
+| نسخه‌های دیگر        | مرزبندی protocol/DBC/persistence نسخه‌محور                                    | فقط 8606 فعال است؛ سازگاری خودکار با Classic/WotLK ادعا نمی‌شود                     |
 
 تفاوت مهم: **ساخت محدود کاراکتر** با **بارگذاری کاراکترهای موجود متنوع** دو قابلیت مستقل‌اند.
 
@@ -140,15 +140,15 @@ FSM: `Authed → LoggingIn → InWorld → LoggingOut → Authed`؛ شکست log
 - فایل `.env` خودکار بارگذاری نمی‌شود. envهای process همچنان override دارند.
 - تقدم: default → فایل → environment → CLI. `WOW_AUTH_DSN` override مستقیم DSN login است؛ در عیب‌یابی متغیرهای باقی‌ماندهٔ shell را بررسی کنید.
 
-| بخش conf | کلیدهای اصلی |
-|---|---|
-| `[network]` | listen، max_connections، auth_timeout، idle_timeout، request_timeout |
-| `[database.login]` | host، port، name، user، password |
-| `[database.characters]` | همان کلیدها؛ دیتابیس کاراکترهای realm |
-| `[database.world]` | همان کلیدها؛ دیتابیس static world |
-| `[world]` | realm_id، send_queue |
-| `[data]` | dbc_path، dbc_locale، load_timeout |
-| `[logging]` | level: debug / info / warn / error |
+| بخش conf                | کلیدهای اصلی                                                         |
+| ----------------------- | -------------------------------------------------------------------- |
+| `[network]`             | listen، max_connections، auth_timeout، idle_timeout، request_timeout |
+| `[database.login]`      | host، port، name، user، password                                     |
+| `[database.characters]` | همان کلیدها؛ دیتابیس کاراکترهای realm                                |
+| `[database.world]`      | همان کلیدها؛ دیتابیس static world                                    |
+| `[world]`               | realm_id، send_queue                                                 |
+| `[data]`                | dbc_path، dbc_locale، load_timeout                                   |
+| `[logging]`             | level: debug / info / warn / error                                   |
 
 نمونهٔ محلی: login=`realmd`، characters=`character1`، world=`mangos1` روی 3306. اعتبارنامه را از نمونه با محیط خود تطبیق دهید؛ این سند رمز واقعی محیط را نگه نمی‌دارد. realmd فقط به login نیاز دارد؛ worldd هر سه را مصرف می‌کند. send_queue بین ۱ و ۱۰۲۴ است؛ dbc_locale بین ۰ و ۱۵، مسیر DBC نسبت به working directory.
 
@@ -169,11 +169,11 @@ go run ./cmd/wowctl realm add Local 127.0.0.1 8085
 
 مالک schema، MaNGOS است؛ Go migration یا CREATE TABLE در مسیر سرویس ندارد. هر realm یک CharacterDSN دارد و `characters` ستون realm_id ندارد. برای realm دوم، اتصال مناسب لازم است.
 
-| دیتابیس | مصرف |
-|---|---|
-| realmd | account، banها، sessionkey، realmlist، realmcharacters |
+| دیتابیس    | مصرف                                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------ |
+| realmd     | account، banها، sessionkey، realmlist، realmcharacters                                                       |
 | character1 | characters، homebind، inventory/item_instance، spells/actions/skills/reputation/tutorial و دادهٔ enumeration |
-| mangos1 | playercreateinfo*، level/class stats، XP، item_template، creature_template، reserved_name |
+| mangos1    | playercreateinfo\*، level/class stats، XP، item_template، creature_template، reserved_name                   |
 
 `sha_pass_hash` از نام/رمز uppercase می‌آید؛ s/v/sessionkey به شکل hex عددی مرجع ذخیره می‌شوند و adapter آن‌ها را به بایت little-endian با عرض ثابت تبدیل می‌کند. حساب‌های دارای s/v خالی/کوتاه می‌توانند هنگام login از hash موجود مقداردهی شوند. کلیدها و password نباید در لاگ درج شوند.
 
@@ -181,7 +181,7 @@ go run ./cmd/wowctl realm add Local 127.0.0.1 8085
 
 transaction ساخت شامل characters/homebind، item_instance/inventory، spell/action/skills/reputation و realmcharacters است. INSERTها گروهی‌اند و موفقیت فقط بعد از commit ارسال می‌شود. نتیجهٔ commit نامعلوم خودکار retry نمی‌شود. تأخیر گزارش‌شدهٔ کاربر پس از batching از حدود ۶٫۸ ثانیه به حدود ۶۷۷ میلی‌ثانیه رسید؛ benchmark تضمین‌شده نیست.
 
-ورود: ownership با account/guid، online flag و داده‌ها زیر transaction بررسی و پلیر رزرو می‌شود. خروج/قطع عادی: online=0، logout_time، played time، tutorial و clearing first-login پس از ورود موفق ذخیره می‌شوند. **موقعیت حرکت، inventory، health، پول و spellهای تغییرکرده فعلاً از snapshot ناقص بازنویسی نمی‌شوند.**
+ورود: ownership با account/guid، online flag و داده‌ها زیر transaction بررسی و پلیر رزرو می‌شود. خروج/قطع عادی: online=0، logout_time، played time، tutorial، clearing first-login و موقعیت (position_x/y/z، orientation، map، zone) در همان transaction ذخیره می‌شوند؛ موقعیت فقط وقتی player وارد world شده باشد نوشته می‌شود. **inventory، health، پول و spellهای تغییرکرده هنوز از snapshot ناقص بازنویسی نمی‌شوند.**
 
 پس از crash ممکن است online=1 باقی بماند. startup هیچ reset سراسری نمی‌زند؛ recovery فقط پس از اطمینان از نبود مالک فعال و به‌صورت هدفمند باید طراحی/انجام شود. سرور C++ در کنار Go روی character DB مشترک نویسنده نباشد؛ قفل قراردادی Go را رعایت نمی‌کند.
 
@@ -208,8 +208,8 @@ display آیتم از Item.dbc تصحیح می‌شود؛ inventory type دیت�
 
 ## قرارداد شبکه و ورود
 
-| جهت World | هدر | طول | opcode | سقف body |
-|---|---|---|---|---|
+| جهت World       | هدر    | طول                            | opcode               | سقف body   |
+| --------------- | ------ | ------------------------------ | -------------------- | ---------- |
 | client → server | ۶ بایت | uint16 big-endian، شامل opcode | uint32 little-endian | ۱۰۲۳۶ بایت |
 | server → client | ۴ بایت | uint16 big-endian، شامل opcode | uint16 little-endian | ۶۵۵۳۳ بایت |
 
@@ -244,7 +244,7 @@ ROOT اجباری ورود حذف شده است. cinematic، social push کام�
 
 codec کل MovementInfo نسخهٔ 8606 را شامل بخش jump/pitch و tailهای وابسته بررسی می‌کند. application/movement موقعیت محدود و finite را در snapshot session اعمال می‌کند؛ جهت normalize می‌شود. فلگ‌های transport و flight خارج از محدوده‌اند. walk/run، چرخش، strafe، jump/land، heartbeat و گذار pitch/swim route دارند.
 
-کلاینت حرکت خودش را نمایش می‌دهد؛ broadcast به دیگران وجود ندارد. محدودیت عددی مختصات جای terrain، collision، map admission، anti-cheat یا fall damage نیست. موقعیت فعلاً ذخیره نمی‌شود، پس ورود بعدی از محل قبلی دیتابیس است.
+کلاینت حرکت خودش را نمایش می‌دهد؛ broadcast به دیگران وجود ندارد. محدودیت عددی مختصات جای terrain، collision، map admission، anti-cheat یا fall damage نیست. موقعیت هنگام logout در همان transaction خروج ذخیره می‌شود (فقط وقتی player وارد world شده باشد)، پس ورود بعدی از محل قبلی است. validation در application/movement است و storage فقط snapshot را می‌نویسد؛ terrain، collision و map admission هنوز وجود ندارند.
 
 ### Logout
 
@@ -270,15 +270,15 @@ codec کل MovementInfo نسخهٔ 8606 را شامل بخش jump/pitch و tail�
 
 ### شواهد موجود
 
-| بخش | شواهد و حد اعتبار |
-|---|---|
-| auth، realm، world handshake و فهرست | کاربر با کلاینت واقعی عبور موفق را گزارش کرده |
-| ساخت Human Warrior | کاربر ساخت و نمایش و بهبود زمان را تأیید کرده |
-| بازآرایی تاریخی پیش از world login | گزارش قبلی race/vet/build و تست رقابت/rollback موفق؛ کاربر refactor را هم تأیید کرده |
-| بارگذاری world و کاراکترهای دیگر | کاربر ورود با heroهای دیگر را تأیید کرده؛ صحت همهٔ stats تأیید نشده |
-| حرکت | کد اضافه شده؛ گزارش صریح پوشش همهٔ حرکت‌ها در شواهد ثبت‌شده نداریم |
-| اصلاح آخر logout | کد موجود؛ تأیید دوبارهٔ کلاینت باقی است |
-| stats جدید | کد موجود؛ test/build/client verification انجام نشده |
+| بخش                                  | شواهد و حد اعتبار                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------ |
+| auth، realm، world handshake و فهرست | کاربر با کلاینت واقعی عبور موفق را گزارش کرده                                        |
+| ساخت Human Warrior                   | کاربر ساخت و نمایش و بهبود زمان را تأیید کرده                                        |
+| بازآرایی تاریخی پیش از world login   | گزارش قبلی race/vet/build و تست رقابت/rollback موفق؛ کاربر refactor را هم تأیید کرده |
+| بارگذاری world و کاراکترهای دیگر     | کاربر ورود با heroهای دیگر را تأیید کرده؛ صحت همهٔ stats تأیید نشده                  |
+| حرکت                                 | کد اضافه شده؛ گزارش صریح پوشش همهٔ حرکت‌ها در شواهد ثبت‌شده نداریم                   |
+| اصلاح آخر logout                     | کد موجود؛ تأیید دوبارهٔ کلاینت باقی است                                              |
+| stats جدید                           | کد موجود؛ test/build/client verification انجام نشده                                  |
 
 نتیجهٔ سبز تست‌های قدیمی به تغییرات جدید تعمیم داده نمی‌شود. طبق درخواست فعلی کاربر، نوشتن/اجرای تست تا تأیید بعدی انجام نمی‌شود. فرمان‌های زیر راهنمای آینده‌اند، نه گزارش اجرای این نوبت:
 
@@ -297,17 +297,17 @@ integrationها opt-in هستند: `WOW_TEST_DSN` برای sandbox auth، `WOW_C
 
 `[logging] level=debug` برای packet و stage؛ info برای رویدادهای اصلی، warn برای محدودیت‌ها. debug قابل غیرفعال‌سازی است و payload حساس auth نباید چاپ شود.
 
-| علامت | بررسی |
-|---|---|
-| listener بالا نمی‌آید | config، اتصال DB، DBC و آخرین خطای startup |
-| static data: invalid/missing | dataset کامل، build فایل‌ها، ساختار و locale؛ entry=0 آیتم فقط هشدار است |
-| character list omitted | GUID هشدار، race/class و نام/مختصات/equipmentCache |
-| player login rejected | ownership، online باقی‌مانده، at_login و داده‌های inventory/homebind |
-| unsupported opcode | name، عدد، state و metadata؛ نداشتن handler را با payload خراب یکی نکنید |
-| failure بعد از logout | بررسی هر دو status دیررس؛ هیچ handler نباید player=nil را مصرف کند |
-| world feature not implemented | بسته کنار گذاشته شده؛ feature هنوز وجود ندارد |
-| stat warning یا HP متفاوت | effectهای اعمال‌نشده، gear، aura و class/level data |
-| مکان پس از ورود مجدد عقب برگشته | حرکت هنوز در DB ذخیره نمی‌شود؛ رفتار شناخته‌شده |
+| علامت                           | بررسی                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------ |
+| listener بالا نمی‌آید           | config، اتصال DB، DBC و آخرین خطای startup                               |
+| static data: invalid/missing    | dataset کامل، build فایل‌ها، ساختار و locale؛ entry=0 آیتم فقط هشدار است |
+| character list omitted          | GUID هشدار، race/class و نام/مختصات/equipmentCache                       |
+| player login rejected           | ownership، online باقی‌مانده، at_login و داده‌های inventory/homebind     |
+| unsupported opcode              | name، عدد، state و metadata؛ نداشتن handler را با payload خراب یکی نکنید |
+| failure بعد از logout           | بررسی هر دو status دیررس؛ هیچ handler نباید player=nil را مصرف کند       |
+| world feature not implemented   | بسته کنار گذاشته شده؛ feature هنوز وجود ندارد                            |
+| stat warning یا HP متفاوت       | effectهای اعمال‌نشده، gear، aura و class/level data                      |
+| مکان پس از ورود مجدد عقب برگشته | حرکت هنوز در DB ذخیره نمی‌شود؛ رفتار شناخته‌شده                          |
 
 ## قدم بعدی
 
