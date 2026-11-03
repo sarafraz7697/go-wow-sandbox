@@ -46,7 +46,14 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	ctx, end := context.WithTimeout(ctx, h.RequestTimeout)
 	defer end()
 	current, err := h.lookup(ctx, s.name, s.ip)
-	if err != nil || !sameSession(s.account, current) {
+	if err != nil {
+		// Transient DB error: do not drop the session. The client can retry
+		// login from the character screen. A real session change returns a
+		// row with a different key, not an error.
+		s.log.Warn("session lookup failed before acquire", "error", err)
+		return fail()
+	}
+	if !sameSession(s.account, current) {
 		return nil, account.ErrChanged
 	}
 	s.log.Debug("loading player", "guid", guid)
@@ -83,11 +90,19 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 		return fail()
 	}
 	current, err = h.lookup(ctx, s.name, s.ip)
-	if err != nil || !sameSession(s.account, current) {
+	if err != nil {
+		s.log.Warn("session lookup failed before send", "error", err)
+		return fail()
+	}
+	if !sameSession(s.account, current) {
 		return nil, account.ErrChanged
 	}
 	if err = s.send(packets...); err != nil {
-		return nil, err
+		// A send failure (queue full, slow client) must not drop the session.
+		// Release the acquired player and let the client retry login; the
+		// fail response keeps the connection alive.
+		s.log.Warn("login packets send failed; releasing player", "guid", guid, "error", err)
+		return fail()
 	}
 	player.Entered = true
 	s.recentlyLoggedOut = false
@@ -100,7 +115,13 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	}
 	restore = false
 	s.log.Info("player entered world", "guid", guid, "map", player.Map, "mode", "local movement")
-	return nil, h.sendTimeSync(s)
+	// The player is now InWorld. An initial time-sync send failure is not
+	// fatal; the tick loop retries on the next cadence.
+	if syncErr := h.sendTimeSync(s); syncErr != nil {
+		s.log.Warn("initial time sync send failed; will retry", "guid", guid, "error", syncErr)
+		s.nextSync = time.Now().Add(5 * time.Second)
+	}
+	return nil, nil
 }
 func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 	if s.player == nil {
@@ -147,19 +168,45 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 		saveCtx, end := context.WithTimeout(ctx, h.RequestTimeout)
 		defer end()
 		if err := h.releasePlayer(saveCtx, s); err != nil {
-			return err
+			// A transient DB error must not abort the session. The player is
+			// still owned (online=1, s.player non-nil); retry on the next
+			// tick. The session closer's defer retries once more if the
+			// connection drops before then.
+			s.log.Warn("logout save failed; will retry", "guid", s.player.GUID, "error", err)
+			s.logoutAt = now.Add(5 * time.Second)
+			return nil
 		}
 		if err := s.transition(StateAuthed); err != nil {
 			return err
 		}
-		return s.send(world.Packet{Opcode: op.SMSG_LOGOUT_COMPLETE})
+		// LOGOUT_COMPLETE is the final confirmation. A send failure (queue
+		// full, slow client) must not undo a successful save or drop the
+		// session; the client also returns to the character screen on its
+		// own after the save, and the next relogin reuses this connection.
+		if err := s.send(world.Packet{Opcode: op.SMSG_LOGOUT_COMPLETE}); err != nil {
+			s.log.Warn("logout complete send failed; player already saved", "error", err)
+		}
+		return nil
 	}
 	if !now.Before(s.nextSync) {
 		current, err := h.lookup(ctx, s.name, s.ip)
-		if err != nil || !sameSession(s.account, current) {
+		if err != nil {
+			// Transient DB error; retry without dropping the session. A real
+			// session change returns a row with a different key, not an error.
+			s.log.Debug("session lookup failed; will retry", "error", err)
+			s.nextSync = now.Add(5 * time.Second)
+			return nil
+		}
+		if !sameSession(s.account, current) {
 			return account.ErrChanged
 		}
-		return h.sendTimeSync(s)
+		// Time sync is a keep-alive cadence, not a correctness requirement.
+		// A transient send failure should not terminate the session.
+		if err := h.sendTimeSync(s); err != nil {
+			s.log.Debug("time sync send failed; will retry next tick", "error", err)
+			s.nextSync = now.Add(5 * time.Second)
+		}
+		return nil
 	}
 	return nil
 }
@@ -200,6 +247,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		if e := r.Finish(); e != nil {
 			return nil, e
 		}
+		if s.player == nil {
+			return nil, nil
+		}
 		if guid != uint64(s.player.GUID) {
 			return nil, codec.ErrWorldPacket
 		}
@@ -220,6 +270,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	router.routes[op.CMSG_LOGOUT_REQUEST] = route{[]State{StateInWorld}, func(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		if len(p.Payload) != 0 {
 			return nil, codec.ErrWorldPacket
+		}
+		if s.player == nil {
+			return nil, nil
 		}
 		if e := s.transition(StateLoggingOut); e != nil {
 			return nil, e
@@ -255,6 +308,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		if len(p.Payload) != 0 {
 			return nil, codec.ErrWorldPacket
 		}
+		if s.player == nil {
+			return nil, nil
+		}
 		elapsed := uint32(time.Since(s.joined) / time.Second)
 		w := wire.NewWriter(8)
 		w.Uint32(s.player.Played + elapsed)
@@ -270,6 +326,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 			}
 			if len(p.Payload) != want {
 				return nil, codec.ErrWorldPacket
+			}
+			if s.player == nil {
+				return nil, nil
 			}
 			r := wire.NewReader(p.Payload)
 			switch p.Opcode {
@@ -340,6 +399,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	add(op.CMSG_SET_SELECTION, consume(8))
 	add(op.CMSG_STANDSTATECHANGE, consume(4))
 	add(op.CMSG_MOVE_TIME_SKIPPED, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if s.player == nil {
+			return nil, nil
+		}
 		r := wire.NewReader(p.Payload)
 		if r.Uint64() != uint64(s.player.GUID) {
 			return nil, codec.ErrWorldPacket
@@ -348,6 +410,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		return nil, r.Finish()
 	})
 	add(op.CMSG_MOVE_NOT_ACTIVE_MOVER, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if s.player == nil {
+			return nil, nil
+		}
 		r := wire.NewReader(p.Payload)
 		if r.Uint64() != uint64(s.player.GUID) {
 			return nil, codec.ErrWorldPacket
@@ -361,6 +426,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	add(op.CMSG_SET_FACTION_INACTIVE, consume(5))
 	router.routes[op.CMSG_SET_ACTIONBAR_TOGGLES] = route{[]State{StateAuthed, StateInWorld, StateLoggingOut}, consume(1)}
 	add(op.CMSG_FORCE_MOVE_ROOT_ACK, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if s.player == nil {
+			return nil, nil
+		}
 		return nil, codec.ValidateRootAck(p.Payload, uint64(s.player.GUID))
 	})
 	// Only the session event loop applies movement. The client renders its own
@@ -374,11 +442,18 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 }
 
 func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+	// A late movement packet must not crash or disconnect the session. If the
+	// player is already released (e.g. logout completed in the same tick),
+	// silently drop the packet; the state machine already filtered most late
+	// packets, but StateLoggingOut can still receive movement before release.
+	if s.player == nil {
+		return nil, nil
+	}
 	position, err := codec.DecodeMovementPosition(p.Payload)
 	if err != nil {
 		return nil, err
 	}
-	moved := s.player != nil && (position.X != s.player.X || position.Y != s.player.Y || position.Z != s.player.Z)
+	moved := position.X != s.player.X || position.Y != s.player.Y || position.Z != s.player.Z
 	if err = movement.Apply(s.player, position); err != nil {
 		return nil, err
 	}
