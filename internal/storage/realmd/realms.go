@@ -6,7 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"wowserver/internal/realm"
+	"wowserver/internal/domain/realm"
 )
 
 func supportsBuild(value string, build uint16) bool {

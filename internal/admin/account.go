@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/config"
 	"wowserver/internal/storage/characters"
 	store "wowserver/internal/storage/realmd"

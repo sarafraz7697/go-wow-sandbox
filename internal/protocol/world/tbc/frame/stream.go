@@ -1,8 +1,12 @@
-package tbc
+package frame
+
+// DOMAIN_WORLD_SPLIT_PATCH: moved from internal/protocol/world/tbc/stream.go.
 
 import (
 	"io"
+
 	"wowserver/internal/protocol/world"
+	"wowserver/internal/protocol/world/tbc/crypt"
 )
 
 // Reader is single-owner and reads exactly one packet per call. It deliberately
@@ -11,21 +15,27 @@ import (
 // Any read/protocol error is terminal: discard this reader and the connection.
 type Reader struct {
 	source io.Reader
-	cipher *headerCipher
+	cipher *crypt.Cipher
 	err    error
 }
 
 func NewReader(source io.Reader) *Reader { return &Reader{source: source} }
+
 func (r *Reader) EnableEncryption(key [40]byte) error {
 	if r.err != nil {
 		return r.err
 	}
-	if r.cipher != nil || key == ([40]byte{}) {
-		return ErrCryptState
+	if r.cipher != nil {
+		return crypt.ErrCryptState
 	}
-	r.cipher = &headerCipher{key: deriveKey(key)}
+	c, err := crypt.NewCipher(key)
+	if err != nil {
+		return err
+	}
+	r.cipher = c
 	return nil
 }
+
 func (r *Reader) ReadPacket() (world.Packet, error) {
 	if r.err != nil {
 		return world.Packet{}, r.err
@@ -36,13 +46,14 @@ func (r *Reader) ReadPacket() (world.Packet, error) {
 	}
 	return p, err
 }
+
 func (r *Reader) readPacket() (world.Packet, error) {
 	var header [ClientHeaderSize]byte
 	if _, err := io.ReadFull(r.source, header[:]); err != nil {
 		return world.Packet{}, err
 	}
 	if r.cipher != nil {
-		r.cipher.decrypt(header[:])
+		r.cipher.Decrypt(header[:])
 	}
 	op, size, err := DecodeClientHeader(header[:])
 	if err != nil {
@@ -62,21 +73,27 @@ func (r *Reader) readPacket() (world.Packet, error) {
 // cipher state has already advanced; retrying that packet is unsafe.
 type Writer struct {
 	destination io.Writer
-	cipher      *headerCipher
+	cipher      *crypt.Cipher
 	err         error
 }
 
 func NewWriter(destination io.Writer) *Writer { return &Writer{destination: destination} }
+
 func (w *Writer) EnableEncryption(key [40]byte) error {
 	if w.err != nil {
 		return w.err
 	}
-	if w.cipher != nil || key == ([40]byte{}) {
-		return ErrCryptState
+	if w.cipher != nil {
+		return crypt.ErrCryptState
 	}
-	w.cipher = &headerCipher{key: deriveKey(key)}
+	c, err := crypt.NewCipher(key)
+	if err != nil {
+		return err
+	}
+	w.cipher = c
 	return nil
 }
+
 func (w *Writer) WritePacket(packet world.Packet) error {
 	if w.err != nil {
 		return w.err
@@ -86,7 +103,7 @@ func (w *Writer) WritePacket(packet world.Packet) error {
 		return err
 	} // no state consumed
 	if w.cipher != nil {
-		w.cipher.encrypt(frame[:ServerHeaderSize])
+		w.cipher.Encrypt(frame[:ServerHeaderSize])
 	}
 	for len(frame) > 0 {
 		n, err := w.destination.Write(frame)

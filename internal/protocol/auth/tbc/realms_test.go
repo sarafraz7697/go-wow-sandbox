@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"wowserver/internal/account"
-	"wowserver/internal/realm"
+	"wowserver/internal/domain/account"
+	"wowserver/internal/domain/realm"
 	"wowserver/internal/testclient"
 )
 

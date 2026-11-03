@@ -1,5 +1,7 @@
 package account
 
+// DOMAIN_WORLD_SPLIT_PATCH: domain model (no protocol, no SQL)
+
 // WorldSession is a snapshot of the login session, not a player or character.
 // Key must never be logged. Expansion is capped to the adapter's capabilities.
 type WorldSession struct {

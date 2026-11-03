@@ -3,7 +3,7 @@ package character
 import (
 	"context"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	domain "wowserver/internal/domain/character"
 )
 

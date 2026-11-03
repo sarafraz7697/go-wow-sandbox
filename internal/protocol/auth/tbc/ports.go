@@ -2,8 +2,8 @@ package tbc
 
 import (
 	"context"
-	"wowserver/internal/account"
-	"wowserver/internal/realm"
+	"wowserver/internal/domain/account"
+	"wowserver/internal/domain/realm"
 )
 
 type AccessStore interface {

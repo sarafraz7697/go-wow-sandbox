@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	. "wowserver/internal/application/character"
 	. "wowserver/internal/domain/character"
 )

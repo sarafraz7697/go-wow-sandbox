@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 )
 
 // WorldSession is read-only: worldd does not initialize SRP credentials or

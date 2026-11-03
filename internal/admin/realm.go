@@ -11,7 +11,7 @@ import (
 
 	"wowserver/internal/config"
 	"wowserver/internal/protocol/auth/tbc"
-	"wowserver/internal/realm"
+	"wowserver/internal/domain/realm"
 	store "wowserver/internal/storage/realmd"
 )
 

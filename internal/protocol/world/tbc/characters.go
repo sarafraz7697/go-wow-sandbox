@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"

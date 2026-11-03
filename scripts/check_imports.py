@@ -12,16 +12,25 @@ RULES = [
         "internal/storage/",
         "internal/application/",
         "internal/app/",
+        "internal/world/",
     )),
     ("internal/application/", (
         "internal/protocol/",
         "internal/storage/",
+        "internal/app/",
+        "internal/world/",
+    )),
+    ("internal/world/", (
+        "internal/protocol/",
+        "internal/storage/",
+        "internal/application/",
         "internal/app/",
     )),
     ("internal/protocol/", (
         "internal/storage/characters",
         "internal/storage/realmd",
         "internal/storage/world",
+        "internal/world/",
     )),
     ("internal/storage/", (
         "internal/protocol/",

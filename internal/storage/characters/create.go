@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/storage/characters/mangosone8606"
 

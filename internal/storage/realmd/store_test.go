@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/protocol/auth/tbc"
 	"wowserver/internal/testclient"
 	"wowserver/internal/transport"

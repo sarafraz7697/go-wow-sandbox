@@ -3,7 +3,7 @@ package tbc
 import (
 	"context"
 	"time"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"

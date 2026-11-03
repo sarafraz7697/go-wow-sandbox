@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"

@@ -9,7 +9,7 @@ import (
 	"io"
 	"net"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/protocol/auth"
 	"wowserver/internal/protocol/auth/tbc/codec"
 )

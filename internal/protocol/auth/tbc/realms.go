@@ -8,10 +8,10 @@ import (
 	"net"
 	"time"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/protocol/auth"
 	"wowserver/internal/protocol/auth/tbc/codec"
-	"wowserver/internal/realm"
+	"wowserver/internal/domain/realm"
 )
 
 // EncodeRealms retains the public entry point for existing callers.

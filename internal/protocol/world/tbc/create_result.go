@@ -3,7 +3,7 @@ package tbc
 import (
 	"errors"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 )

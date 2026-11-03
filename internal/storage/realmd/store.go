@@ -8,7 +8,7 @@ import (
 	"errors"
 	driver "github.com/go-sql-driver/mysql"
 	"strings"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/auth/srp"
 	"wowserver/internal/storage/sqlutil"
 )

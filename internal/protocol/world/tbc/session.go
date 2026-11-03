@@ -10,7 +10,7 @@ import (
 	"net"
 	"sync"
 	"time"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"

@@ -1,5 +1,7 @@
 package account
 
+// DOMAIN_WORLD_SPLIT_PATCH: domain model (no protocol, no SQL)
+
 import (
 	"errors"
 	"strings"

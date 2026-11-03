@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-	"wowserver/internal/realm"
+	"wowserver/internal/domain/realm"
 )
 
 // EncodeRealms follows realmd LoadRealmlist's 8606 branch: u16 count,

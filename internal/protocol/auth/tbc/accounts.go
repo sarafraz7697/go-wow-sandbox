@@ -3,7 +3,7 @@ package tbc
 import (
 	"context"
 	"errors"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 )
 
 func (h Handler) lookupAccount(ctx context.Context, rawName, ip string, trace func(string, ...any)) (account.Account, byte) {

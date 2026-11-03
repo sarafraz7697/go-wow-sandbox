@@ -1,5 +1,7 @@
 package realm
 
+// DOMAIN_WORLD_SPLIT_PATCH: domain model (no protocol, no SQL)
+
 type Realm struct {
 	ID                    uint32
 	Name, Host            string

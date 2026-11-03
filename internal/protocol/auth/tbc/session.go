@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/auth/srp"
 	"wowserver/internal/protocol/auth"
 	"wowserver/internal/protocol/auth/tbc/codec"

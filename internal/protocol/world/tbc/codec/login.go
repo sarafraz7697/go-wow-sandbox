@@ -5,7 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
-	"wowserver/internal/account"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
 	op "wowserver/internal/protocol/world/tbc/opcodes"

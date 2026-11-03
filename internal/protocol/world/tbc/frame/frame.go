@@ -1,8 +1,14 @@
-package tbc
+// Package frame implements build 8606 world packet framing, not a World
+// server.
+//
+// DOMAIN_WORLD_SPLIT_PATCH: moved from internal/protocol/world/tbc/frame.go.
+// The stream Reader/Writer moved to stream.go in the same package.
+package frame
 
 import (
 	"encoding/binary"
 	"errors"
+
 	"wowserver/internal/protocol/world"
 )
 
@@ -16,7 +22,6 @@ const MaxServerPayload = 65535 - 2
 var ErrHeader = errors.New("invalid TBC packet header")
 var ErrSize = errors.New("TBC packet size exceeds bounds")
 var ErrOpcode = errors.New("TBC opcode exceeds framing bounds")
-var ErrCryptState = errors.New("header encryption already enabled or session key is zero")
 
 // DecodeClientHeader operates on a complete plaintext header. Opcode existence
 // and session permissions are checked separately after framing, as in MaNGOS.
