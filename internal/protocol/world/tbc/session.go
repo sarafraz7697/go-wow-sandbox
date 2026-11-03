@@ -221,14 +221,15 @@ func (h *Handler) runSession(parent context.Context, conn net.Conn, reader *Read
 			}
 		}
 		var response *world.Packet
-		if p.Opcode == op.CMSG_CHAR_ENUM {
+		switch p.Opcode {
+		case op.CMSG_CHAR_ENUM:
 			if len(p.Payload) != 0 {
 				return errWorldPacket
 			}
 			response, err = h.characterList(ctx, a, name, ip, log)
-		} else if p.Opcode == op.CMSG_CHAR_CREATE {
+		case op.CMSG_CHAR_CREATE:
 			response, err = h.createCharacter(ctx, a, ip, p, log)
-		} else {
+		default:
 			response, err = characterScreenPacket(p)
 		}
 		if err != nil {
