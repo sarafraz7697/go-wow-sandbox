@@ -165,6 +165,7 @@ func (h *Handler) newRouter() *Router {
 		return codec.CharacterScreenPacket(p)
 	}}
 	h.registerPlayerRoutes(r)
+	h.registerChatRoutes(r)
 	return r
 }
 

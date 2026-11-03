@@ -7,51 +7,57 @@ import (
 	f "wowserver/internal/protocol/world/tbc/updatefields"
 )
 
-// StandState constants for UNIT_FIELD_BYTES_2 byte 0.
-// Reference: SharedDefines.h UNIT_STAND_STATE_*.
+// StandState constants for UNIT_FIELD_BYTES_1 byte 0.
+// Reference: SharedDefines.h UnitStandStateType + Unit.h UNIT_BYTES_1_OFFSET_STAND_STATE = 0.
 const (
 	StandStateStand = 0
 	StandStateSit   = 1
 )
 
-// UNIT_FLAG_STUNNED from SharedDefines.h. Set during logout countdown so the
-// client cannot move and the sit animation plays cleanly.
-const unitFlagStunned = 0x00040000
-
-// LogoutStateUpdate builds a partial SMSG_UPDATE_OBJECT that changes
-// UNIT_FIELD_BYTES_2 (stand state) and UNIT_FIELD_FLAGS (stun) in one
-// update. This mirrors the reference HandleLogoutRequestOpcode path:
-// SetStandState(SIT) + SetRoot + SetFlag(UNIT_FLAG_STUNNED).
+// LogoutStateUpdate builds a partial SMSG_UPDATE_OBJECT that changes only
+// UNIT_FIELD_BYTES_1 (stand state) for one player. This mirrors the reference
+// HandleLogoutRequestOpcode path: SetStandState(UNIT_STAND_STATE_SIT).
 //
-// Use stand=StandStateStand and flags=0 to revert on logout cancel or
-// movement-cancelled logout.
+// Reference: Unit::SetStandState writes to UNIT_FIELD_BYTES_1 byte 0
+// (UNIT_BYTES_1_OFFSET_STAND_STATE = 0). Do NOT use UNIT_FIELD_BYTES_2 —
+// its byte 0 is the sheath state, which is why an earlier version made the
+// player draw weapons instead of sitting.
 //
-// Format: UPDATETYPE_VALUES (1) carries packed GUID + value mask + values,
-// with no typeID, no updateFlag and no movement block.
-func LogoutStateUpdate(guid uint32, standState uint8, unitFlags uint32) (world.Packet, error) {
-	// Build the value mask. Both fields live in block 6 (192..223).
-	bytes2Field := uint32(f.UNIT_FIELD_BYTES_2) // 209
-	flagsField := uint32(f.UNIT_FIELD_FLAGS)    // 207
-	blockCount := int(bytes2Field/32) + 1       // 209/32 = 6 → 7 blocks
-	if int(flagsField/32)+1 > blockCount {
-		blockCount = int(flagsField/32) + 1
-	}
+// We do NOT set UNIT_FLAG_STUNNED here. The reference sets it together with
+// SetRoot, but without a weapon-display pipeline the stunned flag makes the
+// client draw weapons (sheath = MELEE). A future slice can re-add stun once
+// virtual item slots are sent correctly.
+//
+// Format: SMSG_UPDATE_OBJECT with one UPDATETYPE_VALUES block.
+//
+//	uint32 blockCount (1)
+//	uint8  hasTransport (0)
+//	uint8  UPDATETYPE_VALUES (0)
+//	packedGUID
+//	uint8  maskBlockCount
+//	uint32[] mask
+//	uint32[] values (only set fields, ascending field order)
+func LogoutStateUpdate(guid uint32, standState uint8) (world.Packet, error) {
+	// UNIT_FIELD_BYTES_1 = 159 → block 159/32 = 4, bit 159%32 = 31.
+	field := uint32(f.UNIT_FIELD_BYTES_1)
+	blockCount := int(field/32) + 1
 	mask := make([]uint32, blockCount)
-	mask[bytes2Field/32] |= 1 << (bytes2Field % 32)
-	mask[flagsField/32] |= 1 << (flagsField % 32)
+	mask[field/32] |= 1 << (field % 32)
 
 	w := wire.NewWriter(64)
 	w.Uint32(1) // update count: one object
-	w.Uint8(1)  // UPDATETYPE_VALUES: GUID + mask + values only.
+	w.Uint8(0)  // hasTransport: false (matches UpdateData::BuildPacket layout).
+	w.Uint8(0)  // UPDATETYPE_VALUES (0): packed GUID + mask + values only.
 	w.PackedGUID(uint64(guid))
 	w.Uint8(uint8(blockCount))
 	for _, m := range mask {
 		w.Uint32(m)
 	}
-	// Send the set fields in ascending field-index order, not mask-bit order.
-	// UNIT_FIELD_FLAGS (207) < UNIT_FIELD_BYTES_2 (209).
-	w.Uint32(unitFlags)
-	w.Uint32(uint32(standState) | 0x2800)
+	// Only the set field is sent. Put standState in byte 0 (little-endian:
+	// lowest 8 bits). The other three bytes (pet loyalty, vis flags, misc)
+	// are 0 for a player with no pet and no special flags; sending 0 is
+	// safe because the login update already set them.
+	w.Uint32(uint32(standState))
 	b, err := w.Result()
 	if err != nil {
 		return world.Packet{}, err
@@ -59,12 +65,12 @@ func LogoutStateUpdate(guid uint32, standState uint8, unitFlags uint32) (world.P
 	return world.Packet{Opcode: op.SMSG_UPDATE_OBJECT, Payload: b}, nil
 }
 
-// StandStateUpdate is a thin wrapper kept for call-site clarity when only the
-// stand state changes (no stun flag toggle).
+// StandStateUpdate is a thin wrapper kept for call-site clarity.
 func StandStateUpdate(guid uint32, standState uint8) (world.Packet, error) {
-	return LogoutStateUpdate(guid, standState, 0)
+	return LogoutStateUpdate(guid, standState)
 }
 
-// UnitFlagStunned returns the UNIT_FLAG_STUNNED value used during logout.
-// Exposed as a function so callers do not hardcode the constant.
-func UnitFlagStunned() uint32 { return unitFlagStunned }
+// UnitFlagStunned returns 0 — kept only so call sites that referenced it
+// in a previous slice still compile. Stun is intentionally not applied
+// during logout until the weapon-display pipeline is correct.
+func UnitFlagStunned() uint32 { return 0 }

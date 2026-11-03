@@ -280,11 +280,11 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		// Without rest-area geometry or GM policy, use the normal 20-second path.
 		s.logoutAt = time.Now().Add(20 * time.Second)
 		s.log.Debug("logout countdown started", "guid", s.player.GUID)
-		// Reference: HandleLogoutRequestOpcode sits the player, roots and stuns
-		// so the logout countdown animation plays and the client cannot move.
-		// We send all three changes in one partial UPDATE_OBJECT. On cancel or
-		// movement-cancelled logout, we revert with stand + no stun.
-		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateSit, codec.UnitFlagStunned()); e == nil {
+		// Reference: HandleLogoutRequestOpcode sits the player so the logout
+		// countdown animation plays. We send a partial UPDATE_OBJECT that
+		// changes UNIT_FIELD_BYTES_1 byte 0 (stand state) to SIT. On cancel
+		// or movement-cancelled logout, we revert to STAND.
+		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateSit); e == nil {
 			_ = s.send(upd)
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_RESPONSE, Payload: make([]byte, 5)}, nil
@@ -298,9 +298,9 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 			if e := s.transition(StateInWorld); e != nil {
 				return nil, e
 			}
-			// Stand the player back up and clear the stun flag.
+			// Stand the player back up.
 			if s.player != nil {
-				if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand, 0); e == nil {
+				if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand); e == nil {
 					_ = s.send(upd)
 				}
 			}
@@ -476,8 +476,8 @@ func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packe
 			return nil, err
 		}
 		s.logoutAt = time.Time{}
-		// Stand the player back up and clear the stun flag.
-		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand, 0); e == nil {
+		// Stand the player back up.
+		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand); e == nil {
 			_ = s.send(upd)
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil

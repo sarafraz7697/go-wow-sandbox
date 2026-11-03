@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"time"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/protocol/world"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
 )
@@ -43,9 +44,16 @@ func (s *Session) run(ctx context.Context, router *Router, incoming <-chan recei
 			p := result.packet
 			response, err := router.dispatch(ctx, s, p)
 			if err != nil {
+				// Only account.ErrChanged (real session invalidation) must
+				// close the session. A malformed or out-of-state packet from
+				// a buggy handler or a partial feature must never disconnect
+				// the client; log at debug and continue.
+				if errors.Is(err, account.ErrChanged) {
+					return err
+				}
 				meta, _ := op.Lookup(p.Opcode)
-				s.log.Warn("world packet rejected", "opcode", p.Opcode, "name", meta.Name, "bytes", len(p.Payload), "state", s.state, "error", err)
-				return err
+				s.log.Debug("world packet rejected; session continues", "opcode", p.Opcode, "name", meta.Name, "bytes", len(p.Payload), "state", s.state, "error", err)
+				continue
 			}
 			if response == nil {
 				continue
