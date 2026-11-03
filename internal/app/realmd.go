@@ -14,7 +14,7 @@ import (
 )
 
 func RunRealmd(ctx context.Context, c config.RealmdConfig, logOutput io.Writer) error {
-	logger := logger(c.LogLevel, logOutput)
+	logger := logger(c.LogLevel, logOutput, c.LogColor)
 	logger.Info("realmd starting", "log_level", c.LogLevel)
 	logger.Debug("connecting to authentication database")
 	db, err := store.Open(ctx, c.DSN())

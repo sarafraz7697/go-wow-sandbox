@@ -23,6 +23,7 @@ type Config struct {
 	RequestTimeout    time.Duration
 	Debug             bool
 	LogLevel          string
+	LogColor          string
 	Database          Database
 	CharacterDatabase Database
 	WorldDatabase     Database
@@ -213,6 +214,11 @@ func (c *Config) set(key, value string) error {
 		c.RequestTimeout, err = time.ParseDuration(value)
 	case "logging.level":
 		c.LogLevel = value
+	case "logging.color":
+		if value != "auto" && value != "always" && value != "never" {
+			return fmt.Errorf("logging.color must be auto, always or never")
+		}
+		c.LogColor = value
 	case "database.host":
 		c.Database.Host = value
 	case "database.port":

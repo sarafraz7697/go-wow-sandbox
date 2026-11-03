@@ -260,8 +260,6 @@ func writeSession(ctx context.Context, conn net.Conn, writer *Writer, queue <-ch
 			if err := writer.WritePacket(p); err != nil {
 				return err
 			}
-			meta, _ := op.Lookup(p.Opcode)
-			log.Debug("world packet sent", "opcode", p.Opcode, "name", meta.Name, "bytes", len(p.Payload))
 		}
 	}
 }

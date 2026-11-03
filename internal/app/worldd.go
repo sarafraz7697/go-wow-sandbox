@@ -25,7 +25,7 @@ import (
 )
 
 func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) error {
-	log := logger(c.LogLevel, logOutput)
+	log := logger(c.LogLevel, logOutput, c.LogColor)
 	// This composition root deliberately binds protocol, DBC and native persistence to 8606.
 	log.Info("worldd starting", "build", 8606, "persistence", "mangosone8606", "realm_id", c.RealmID, "log_level", c.LogLevel)
 	db, err := store.Open(ctx, c.DSN())

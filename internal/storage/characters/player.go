@@ -45,11 +45,14 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	var owner uint64
 	var online uint8
 	err = tx.QueryRowContext(ctx, `SELECT guid,account,name,race,class,gender,level,playerBytes,playerBytes2,playerFlags,at_login,map,zone,position_x,position_y,position_z,orientation,xp,money,health,power2,totaltime,leveltime,online FROM characters WHERE guid=? AND account=? AND (deleteDate IS NULL OR deleteDate=0) FOR UPDATE`, guid, accountID).Scan(&p.GUID, &owner, &p.Name, &p.Race, &p.Class, &p.Gender, &p.Level, &p.PlayerBytes, &p.PlayerBytes2, &p.PlayerFlags, &p.AtLogin, &p.Map, &p.Zone, &p.X, &p.Y, &p.Z, &p.Orientation, &p.XP, &p.Money, &p.Health, &p.Rage, &p.Played, &p.LevelPlayed, &online)
-	if errors.Is(err, sql.ErrNoRows) || online != 0 {
-		return nil, character.ErrPlayerUnavailable
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: character missing, deleted or not owned by account", character.ErrPlayerUnavailable)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if online != 0 {
+		return nil, fmt.Errorf("%w: character online flag is set", character.ErrPlayerUnavailable)
 	}
 	if p.Gender > 1 || p.Level == 0 || p.Level > 70 || p.AtLogin & ^uint32(32) != 0 {
 		return nil, character.ErrPlayerUnsupported
@@ -59,7 +62,7 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	}
 	for _, v := range []float32{p.X, p.Y, p.Z, p.Orientation} {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) || math.Abs(float64(v)) > 100000 {
-			return nil, character.ErrPlayerUnavailable
+			return nil, fmt.Errorf("%w: invalid saved position or orientation", character.ErrPlayerUnavailable)
 		}
 	}
 	if err = tx.QueryRowContext(ctx, "SELECT map,zone,position_x,position_y,position_z FROM character_homebind WHERE guid=?", guid).Scan(&p.HomeMap, &p.HomeZone, &p.HomeX, &p.HomeY, &p.HomeZ); err != nil {
@@ -100,7 +103,7 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		var b, a, k uint32
 		e := r.Scan(&b, &a, &k)
 		if b >= 132 || a > 0xffffff || k > 255 {
-			return character.ErrPlayerUnavailable
+			return fmt.Errorf("%w: invalid action button record", character.ErrPlayerUnavailable)
 		}
 		p.Actions[b] = a | k<<24
 		return e
@@ -111,7 +114,7 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		var v character.InitialSkill
 		e := r.Scan(&v.ID, &v.Value, &v.Max)
 		if v.ID > 65535 || v.Value > 65535 || v.Max > 65535 {
-			return character.ErrPlayerUnavailable
+			return fmt.Errorf("%w: invalid skill record", character.ErrPlayerUnavailable)
 		}
 		p.Skills = append(p.Skills, v)
 		return e

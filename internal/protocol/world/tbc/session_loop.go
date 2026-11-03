@@ -41,10 +41,10 @@ func (s *Session) run(ctx context.Context, router *Router, incoming <-chan recei
 				return result.err
 			}
 			p := result.packet
-			meta, _ := op.Lookup(p.Opcode)
-			s.log.Debug("world packet received", "opcode", p.Opcode, "name", meta.Name, "bytes", len(p.Payload), "state", s.state)
 			response, err := router.dispatch(ctx, s, p)
 			if err != nil {
+				meta, _ := op.Lookup(p.Opcode)
+				s.log.Warn("world packet rejected", "opcode", p.Opcode, "name", meta.Name, "bytes", len(p.Payload), "state", s.state, "error", err)
 				return err
 			}
 			if response == nil {

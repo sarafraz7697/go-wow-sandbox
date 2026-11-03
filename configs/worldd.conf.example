@@ -19,6 +19,7 @@ password = 'mangos'
 
 [logging]
 level = debug
+color = auto
 
 [database.world]
 host = 127.0.0.1

@@ -12,6 +12,7 @@ type Common struct {
 	AuthTimeout, IdleTimeout, RequestTimeout time.Duration
 	Debug                                    bool
 	LogLevel                                 string
+	LogColor                                 string
 	Database                                 Database
 	dsnOverride                              string
 }
@@ -37,7 +38,7 @@ type WorldConfig struct {
 func (c WorldConfig) CharacterDSN() string { return c.CharacterDatabase.DSN() }
 func (c WorldConfig) WorldDSN() string     { return c.WorldDatabase.DSN() }
 func common(c Config) Common {
-	return Common{Listen: c.Listen, MaxConnections: c.MaxConnections, AuthTimeout: c.AuthTimeout, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, Debug: c.Debug, LogLevel: c.LogLevel, Database: c.Database, dsnOverride: c.dsnOverride}
+	return Common{Listen: c.Listen, MaxConnections: c.MaxConnections, AuthTimeout: c.AuthTimeout, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, Debug: c.Debug, LogLevel: c.LogLevel, LogColor: c.LogColor, Database: c.Database, dsnOverride: c.dsnOverride}
 }
 func ParseRealmd(args []string, out io.Writer) (RealmdConfig, error) {
 	c, e := parse(args, out, "realmd", "configs/realmd.conf", "127.0.0.1:3724")

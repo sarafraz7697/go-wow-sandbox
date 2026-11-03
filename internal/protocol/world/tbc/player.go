@@ -26,6 +26,9 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 		return nil, err
 	}
 	fail := func() (*world.Packet, error) {
+		// The client tears down its tentative world UI after a rejected login
+		// too, and may flush CANCEL_TRADE before returning to character selection.
+		s.recentlyLoggedOut = true
 		return &world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x46}}, nil
 	}
 	if h.Players == nil || h.Data == nil || guid == 0 || guid>>32 != 0 {
@@ -204,12 +207,12 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	})
 	add(op.CMSG_TIME_SYNC_RESP, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
-		counter, clock := r.Uint32(), r.Uint32()
+		counter := r.Uint32()
+		r.Uint32() // client clock; no per-packet success log
 		if e := r.Finish(); e != nil {
 			return nil, e
 		}
-		if sent, ok := s.syncPending[counter]; ok {
-			s.log.Debug("time sync acknowledged", "counter", counter, "client_clock", clock, "rtt_ms", time.Since(sent).Milliseconds())
+		if _, ok := s.syncPending[counter]; ok {
 			delete(s.syncPending, counter)
 		}
 		return nil, nil
