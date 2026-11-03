@@ -3,6 +3,7 @@ package character
 import (
 	"errors"
 	"testing"
+	. "wowserver/internal/domain/character"
 )
 
 func TestCreationPolicy(t *testing.T) {

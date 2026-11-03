@@ -3,7 +3,7 @@ package mangosone8606
 import (
 	"strings"
 	"testing"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 )
 

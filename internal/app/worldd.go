@@ -1,5 +1,7 @@
 package app
 
+// PACKAGE_SKELETON_PATCH
+
 import (
 	"context"
 	"fmt"
@@ -7,9 +9,10 @@ import (
 	"log/slog"
 	"net"
 
-	"wowserver/internal/character"
-	creationTBC "wowserver/internal/character/tbc"
+	charapp "wowserver/internal/application/character"
+	creationTBC "wowserver/internal/application/character/tbc"
 	"wowserver/internal/config"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 	dataTBC "wowserver/internal/gamedata/tbc"
 	"wowserver/internal/protocol/world/tbc"
@@ -73,7 +76,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	}
 	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter stationary world (phase 9)")
 	h := &tbc.Handler{Store: db, Characters: chars, Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
-	h.Creator = character.NewService(profile, creator)
+	h.Creator = charapp.NewService(profile, creator)
 	h.Players = chars
 	creator.Logger = log
 	server := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: log, Handle: h.Serve}

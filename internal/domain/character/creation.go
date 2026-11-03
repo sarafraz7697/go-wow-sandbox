@@ -1,5 +1,7 @@
 package character
 
+// PACKAGE_SKELETON_PATCH: domain model (no protocol, no SQL)
+
 import (
 	"errors"
 	"wowserver/internal/gamedata"

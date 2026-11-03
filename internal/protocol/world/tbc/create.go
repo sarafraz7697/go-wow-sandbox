@@ -2,20 +2,24 @@ package tbc
 
 import (
 	"context"
-	"errors"
 	"log/slog"
+
 	"wowserver/internal/account"
-	"wowserver/internal/character"
-	"wowserver/internal/gamedata"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
 )
 
+// CharacterCreator is the application port used by the create handler.
+// Implemented by character.Service (profile + store); not by SQL directly.
 type CharacterCreator interface {
 	Create(context.Context, account.WorldSession, string, character.CreateRequest) (uint32, error)
 }
 
+// HANDLER_ORCHESTRATION_PATCH
+// createCharacter only orchestrates: decode -> application service -> encode.
+// Domain rules live in character.Service / policy / profile; persistence in storage.
 func (h *Handler) createCharacter(ctx context.Context, a account.WorldSession, ip string, p world.Packet, log *slog.Logger) (*world.Packet, error) {
 	req, err := codec.DecodeCreate(p.Payload)
 	if err != nil {
@@ -32,34 +36,9 @@ func (h *Handler) createCharacter(ctx context.Context, a account.WorldSession, i
 	log.Debug("creating character", "account_id", a.ID, "race", req.Race, "class", req.Class)
 	guid, err := h.Creator.Create(ctx, a, ip, req)
 	if err != nil {
-		code := byte(0x31)
-		switch {
-		case errors.Is(err, character.ErrNameRepeated):
-			code = 0x55
-		case errors.Is(err, character.ErrDisabled):
-			code = 0x33
-		case errors.Is(err, gamedata.ErrNameReserved):
-			code = 0x52
-		case errors.Is(err, gamedata.ErrNameAlphabet):
-			code = 0x4f
-		case errors.Is(err, gamedata.ErrNameLength):
-			code = 0x4d
-			if len(req.Name) == 0 {
-				code = 0x4c
-			} else if len(req.Name) > 12 {
-				code = 0x4e
-			}
-
-		case errors.Is(err, account.ErrChanged):
+		code, disconnect := CreateResultCode(err, req.Name)
+		if disconnect {
 			return nil, err
-		case errors.Is(err, character.ErrNameInUse):
-			code = 0x32
-		case errors.Is(err, character.ErrFaction):
-			code = 0x34
-		case errors.Is(err, character.ErrRealmFull):
-			code = 0x35
-		case errors.Is(err, character.ErrAccountFull):
-			code = 0x36
 		}
 		log.Warn("character creation failed", "account_id", a.ID, "result", code, "error", err)
 		return response(code)

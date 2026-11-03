@@ -2,7 +2,7 @@ package codec
 
 import (
 	"time"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"

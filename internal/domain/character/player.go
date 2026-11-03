@@ -1,5 +1,7 @@
 package character
 
+// PACKAGE_SKELETON_PATCH: domain model (no protocol, no SQL)
+
 import "errors"
 
 var ErrPlayerUnavailable = errors.New("character unavailable for world login")

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 	"wowserver/internal/account"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"

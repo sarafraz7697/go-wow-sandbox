@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"wowserver/internal/account"
+	. "wowserver/internal/application/character"
+	. "wowserver/internal/domain/character"
 )
 
 type profileStub struct{ err error }

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/wire"
 )

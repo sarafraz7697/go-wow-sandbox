@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 	"wowserver/internal/account"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/world"
 	op "wowserver/internal/protocol/world/tbc/opcodes"

@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"wowserver/internal/account"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
@@ -18,6 +18,9 @@ type CharacterStore interface {
 	List(context.Context, uint64) ([]character.Summary, error)
 }
 
+// HANDLER_ORCHESTRATION_PATCH
+// characterList orchestrates only: load summaries -> encode enum packet.
+// Omitted rows are encode failures (missing static data), not domain policy.
 func (h *Handler) characterList(ctx context.Context, a account.WorldSession, name, ip string, log *slog.Logger) (*world.Packet, error) {
 	if h.Characters == nil || h.Data == nil {
 		return nil, errors.New("character enumeration stores not configured")

@@ -13,10 +13,11 @@ import (
 	"strings"
 	"time"
 
-	mysql "github.com/go-sql-driver/mysql"
 	"wowserver/internal/account"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/storage/characters/mangosone8606"
+
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 type Creator struct {

@@ -1,5 +1,7 @@
 package character
 
+// PACKAGE_SKELETON_PATCH: domain model (no protocol, no SQL)
+
 // CreationFacts is read under the storage transaction's locks.
 type CreationFacts struct {
 	RealmCount, OtherRealmsCount  uint32

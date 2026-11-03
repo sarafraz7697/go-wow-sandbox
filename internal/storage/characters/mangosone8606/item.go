@@ -5,7 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 )
 
 // Build-8606 ITEM_END is 60 words. This is the native MaNGOS item_instance

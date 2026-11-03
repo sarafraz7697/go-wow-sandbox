@@ -3,7 +3,7 @@ package characters
 import (
 	"context"
 	"errors"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 )
 
 // Realm isolation is by configured CharacterDSN, as in MaNGOS (there is no

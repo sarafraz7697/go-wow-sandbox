@@ -1,7 +1,7 @@
 package codec
 
 import (
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/protocol/wire"
 )
 

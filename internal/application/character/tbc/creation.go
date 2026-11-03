@@ -1,12 +1,14 @@
 // Package tbc builds the deliberately limited build-8606 creation profile.
 package tbc
 
+// PACKAGE_SKELETON_PATCH: profile lives under application/character/tbc
+
 import (
 	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/dbc"
 	"wowserver/internal/gamedata"
 )

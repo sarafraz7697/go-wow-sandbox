@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 	"wowserver/internal/account"
-	"wowserver/internal/character"
+	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 )
 
