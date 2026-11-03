@@ -49,6 +49,7 @@ type Level struct {
 type ClassLevel struct{ Class, Level, Health, Mana uint32 }
 type XP struct{ Level, Next uint32 }
 type Rows struct {
+	ItemDetails []ItemDetails
 	Creatures   []Creature
 	Starts      []Start
 	Items       []Item
@@ -61,6 +62,8 @@ type Rows struct {
 	Reserved    []string
 }
 type ClientData struct {
+	Cooldowns    []SpellCooldown
+	Factions     []Faction
 	Enchantments []Enchantment
 	Items        []Item
 	Races        []Race
@@ -81,6 +84,9 @@ type outfitKey struct {
 	Gender, ID uint8
 }
 type Catalog struct {
+	cooldowns        map[uint32]SpellCooldown
+	itemDetails      map[uint32]ItemDetails
+	factionIndices   map[uint32]int32
 	enchantments     map[uint32]Enchantment
 	creatures        map[uint32]Creature
 	skippedZeroItems int

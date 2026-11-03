@@ -14,6 +14,22 @@ func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
 	if maxLevel < 1 || maxLevel > 255 {
 		return nil, fmt.Errorf("invalid max level")
 	}
+	c.itemDetails = make(map[uint32]ItemDetails, len(db.ItemDetails))
+	c.cooldowns = make(map[uint32]SpellCooldown, len(client.Cooldowns))
+	for _, v := range client.Cooldowns {
+		c.cooldowns[v.ID] = v
+	}
+	for _, v := range db.ItemDetails {
+		if v.ID != 0 {
+			c.itemDetails[v.ID] = v
+		}
+	}
+	c.factionIndices = make(map[uint32]int32, len(client.Factions))
+	for _, v := range client.Factions {
+		if v.Index >= 0 && v.Index < 128 {
+			c.factionIndices[v.ID] = v.Index
+		}
+	}
 	if err := c.loadClient(client); err != nil {
 		return nil, err
 	}

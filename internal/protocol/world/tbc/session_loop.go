@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 	"wowserver/internal/protocol/world"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
 )
@@ -15,8 +16,16 @@ type received struct {
 
 // run is the only consumer allowed to modify session state.
 func (s *Session) run(ctx context.Context, router *Router, incoming <-chan received, queue chan<- world.Packet) error {
+	timer := time.NewTicker(250 * time.Millisecond)
+	defer timer.Stop()
 	for {
 		select {
+		case <-timer.C:
+			if s.onTick != nil {
+				if err := s.onTick(ctx, s); err != nil {
+					return err
+				}
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		case event := <-s.events:

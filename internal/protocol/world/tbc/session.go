@@ -24,6 +24,7 @@ type WorldSessionStore interface {
 // Handler must be shared by all connections of this realm and never copied.
 // It owns a process-local admission registry; it does not model a game world.
 type Handler struct {
+	Players                     PlayerStore
 	Creator                     CharacterCreator
 	Characters                  CharacterStore
 	Data                        *gamedata.Catalog // Immutable startup snapshot, used by later character phases.
@@ -220,6 +221,28 @@ func (h *Handler) runSession(parent context.Context, conn net.Conn, reader *Read
 	// Joining the reader before returning prevents it retaining the connection.
 	defer func() { cancel(); _ = conn.Close(); <-readerDone }()
 	s := &Session{state: StateAuthed, account: a, name: name, ip: ip, log: log, events: make(chan transition, 8), done: ctx.Done()}
+	s.send = func(packets ...world.Packet) error {
+		writeCtx, end := context.WithTimeout(ctx, h.RequestTimeout)
+		defer end()
+		for _, p := range packets {
+			select {
+			case queue <- p:
+			case <-writeCtx.Done():
+				return writeCtx.Err()
+			}
+		}
+		return nil
+	}
+	s.onTick = h.playerTick
+	defer func() {
+		if s.player != nil {
+			cleanup, end := context.WithTimeout(context.Background(), h.RequestTimeout)
+			defer end()
+			if err := h.releasePlayer(cleanup, s); err != nil {
+				log.Error("player cleanup failed; online flag may require recovery", "error", err)
+			}
+		}
+	}()
 	defer func() { _ = s.transition(StateClosed) }()
 	router := h.newRouter()
 	return s.run(ctx, router, incoming, queue)

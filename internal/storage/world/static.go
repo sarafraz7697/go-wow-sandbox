@@ -82,6 +82,11 @@ func (s *Store) LoadStatic(ctx context.Context) (gamedata.Rows, error) {
 			return gamedata.Rows{}, fmt.Errorf("load %s: %w", q.table, err)
 		}
 	}
+	var err error
+	out.ItemDetails, err = s.loadItemDetails(ctx)
+	if err != nil {
+		return out, fmt.Errorf("load item details: %w", err)
+	}
 	return out, nil
 }
 func (s *Store) readStatic(ctx context.Context, query string, scan func(*sql.Rows) error) error {

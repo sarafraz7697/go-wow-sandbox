@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 	"wowserver/internal/account"
+	"wowserver/internal/character"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
@@ -28,12 +30,18 @@ type transition struct {
 // Session is owned by its event loop. Readers and world workers must not read
 // or mutate state directly. Handler.active remains a separate admission registry.
 type Session struct {
-	state    State
-	account  account.WorldSession
-	name, ip string
-	log      *slog.Logger
-	events   chan transition
-	done     <-chan struct{}
+	player                     *character.Player
+	joined, logoutAt, nextSync time.Time
+	syncCounter                uint32
+	syncPending                map[uint32]time.Time
+	send                       func(...world.Packet) error
+	onTick                     func(context.Context, *Session) error
+	state                      State
+	account                    account.WorldSession
+	name, ip                   string
+	log                        *slog.Logger
+	events                     chan transition
+	done                       <-chan struct{}
 }
 
 func (s *Session) transition(next State) error {
@@ -124,7 +132,7 @@ func (h *Handler) newRouter() *Router {
 	stateless := func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
 		return codec.CharacterScreenPacket(p)
 	}
-	for _, opcode := range []uint32{op.CMSG_CHAR_DELETE, op.CMSG_PLAYER_LOGIN, op.CMSG_REALM_SPLIT} {
+	for _, opcode := range []uint32{op.CMSG_CHAR_DELETE, op.CMSG_REALM_SPLIT} {
 		r.routes[opcode] = route{[]State{StateAuthed}, stateless}
 	}
 	live := []State{StateAuthed, StateLoggingIn, StateInWorld, StateLoggingOut}
@@ -135,5 +143,6 @@ func (h *Handler) newRouter() *Router {
 		}
 		return codec.CharacterScreenPacket(p)
 	}}
+	h.registerPlayerRoutes(r)
 	return r
 }

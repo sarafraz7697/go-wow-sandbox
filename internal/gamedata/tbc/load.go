@@ -103,6 +103,11 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}); err != nil {
 		return data, err
 	}
+	if err := load("Faction", 53, 212, func(r *record) {
+		data.Factions = append(data.Factions, gamedata.Faction{ID: r.u(0), Index: int32(r.u(4))})
+	}); err != nil {
+		return data, err
+	}
 	if err := load("ChrClasses", 58, 232, func(r *record) {
 		data.Classes = append(data.Classes, gamedata.Class{ID: r.u(0), Power: r.u(8), SpellFamily: r.u(224), Name: r.name(4, locale)})
 	}); err != nil {
@@ -125,7 +130,10 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}); err != nil {
 		return data, err
 	}
-	if err := load("Spell", 216, 864, func(r *record) { data.SpellIDs = append(data.SpellIDs, r.u(0)) }); err != nil {
+	if err := load("Spell", 216, 864, func(r *record) {
+		data.SpellIDs = append(data.SpellIDs, r.u(0))
+		data.Cooldowns = append(data.Cooldowns, gamedata.SpellCooldown{ID: r.u(0), Category: r.u(4), Recovery: r.u(92), CategoryRecovery: r.u(96)})
+	}); err != nil {
 		return data, err
 	}
 	if err := load("SpellItemEnchantment", 34, 136, func(r *record) {

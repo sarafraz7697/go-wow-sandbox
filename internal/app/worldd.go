@@ -22,7 +22,7 @@ import (
 func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) error {
 	log := logger(c.LogLevel, logOutput)
 	// This composition root deliberately binds protocol, DBC and native persistence to 8606.
-	log.Info("worldd starting", "build", 8606, "persistence", "mangosone8606", "phase", "8.5", "realm_id", c.RealmID, "log_level", c.LogLevel)
+	log.Info("worldd starting", "build", 8606, "persistence", "mangosone8606", "phase", 9, "realm_id", c.RealmID, "log_level", c.LogLevel)
 	db, err := store.Open(ctx, c.DSN())
 	if err != nil {
 		return err
@@ -48,6 +48,9 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	defer chars.DB.Close()
 	charCtx, charCancel := context.WithTimeout(ctx, c.RequestTimeout)
 	err = chars.CheckEnumeration(charCtx)
+	if err == nil {
+		err = chars.CheckPlayer(charCtx)
+	}
 	charCancel()
 	if err != nil {
 		return err
@@ -68,9 +71,10 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	if err != nil {
 		return fmt.Errorf("world listen: %w", err)
 	}
-	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list and create Human Warrior (phase 8)")
+	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter stationary world (phase 9)")
 	h := &tbc.Handler{Store: db, Characters: chars, Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
 	h.Creator = character.NewService(profile, creator)
+	h.Players = chars
 	creator.Logger = log
 	server := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: log, Handle: h.Serve}
 	return server.Serve(ctx, ln)
