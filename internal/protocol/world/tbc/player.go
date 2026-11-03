@@ -3,6 +3,7 @@ package tbc
 import (
 	"context"
 	"time"
+	characterstats "wowserver/internal/application/character/stats"
 	"wowserver/internal/application/movement"
 	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
@@ -65,6 +66,14 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 			}
 		}
 	}()
+	player.Stats, err = characterstats.Calculate(player, h.Data)
+	if err != nil {
+		s.log.Warn("player stat calculation failed", "error", err)
+		return fail()
+	}
+	if len(player.Stats.Limitations) > 0 {
+		s.log.Warn("player stats use base and equipment calculation", "limitations", player.Stats.Limitations)
+	}
 	packets, err := codec.LoginPackets(player, h.Data, time.Now())
 	if err != nil {
 		s.log.Warn("player snapshot unsupported", "guid", guid, "error", err)
@@ -78,6 +87,7 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 		return nil, err
 	}
 	player.Entered = true
+	s.recentlyLoggedOut = false
 	s.joined = time.Now()
 	s.logoutAt = time.Time{}
 	s.syncCounter = 0
@@ -101,6 +111,9 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 		return err
 	}
 	s.log.Info("player saved and released", "guid", s.player.GUID, "played_seconds", seconds)
+	if s.player.Entered {
+		s.recentlyLoggedOut = true
+	}
 	s.player = nil
 	s.logoutAt = time.Time{}
 	s.syncPending = nil

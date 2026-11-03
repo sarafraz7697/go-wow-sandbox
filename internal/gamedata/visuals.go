@@ -2,7 +2,11 @@ package gamedata
 
 import "fmt"
 
-type Enchantment struct{ ID, Visual uint32 }
+type Enchantment struct {
+	ID, Visual                  uint32
+	Effects, Amounts, Arguments [3]uint32
+	Condition                   uint32
+}
 type Creature struct{ ID, Family uint32 }
 
 func (c *Catalog) Enchantment(id uint32) (Enchantment, bool) {

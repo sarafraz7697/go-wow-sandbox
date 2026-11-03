@@ -31,6 +31,7 @@ type transition struct {
 // Session is owned by its event loop. Readers and world workers must not read
 // or mutate state directly. Handler.active remains a separate admission registry.
 type Session struct {
+	recentlyLoggedOut          bool
 	unsupportedSeen            map[uint32]bool
 	player                     *character.Player
 	joined, logoutAt, nextSync time.Time
@@ -93,6 +94,16 @@ type route struct {
 type Router struct{ routes map[uint32]route }
 
 func (r *Router) dispatch(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+	// The client can flush in-world UI commands after LOGOUT_COMPLETE.
+	// Never run their handlers against the released player snapshot.
+	if s.state == StateAuthed && s.recentlyLoggedOut {
+		if m, ok := op.Lookup(p.Opcode); ok && (strings.HasPrefix(m.Name, "CMSG_") || strings.HasPrefix(m.Name, "MSG_")) && (m.Status == op.STATUS_LOGGEDIN || m.Status == op.STATUS_LOGGEDIN_OR_RECENTLY_LOGGEDOUT) && p.Opcode != op.CMSG_UPDATE_ACCOUNT_DATA {
+			if s.log != nil {
+				s.log.Debug("late world packet ignored after logout", "opcode", p.Opcode, "name", m.Name)
+			}
+			return nil, nil
+		}
+	}
 	entry, ok := r.routes[p.Opcode]
 	if !ok {
 		return r.unsupported(s, p)

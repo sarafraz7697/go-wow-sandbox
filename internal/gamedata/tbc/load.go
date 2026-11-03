@@ -137,7 +137,13 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 		return data, err
 	}
 	if err := load("SpellItemEnchantment", 34, 136, func(r *record) {
-		data.Enchantments = append(data.Enchantments, gamedata.Enchantment{ID: r.u(0), Visual: r.u(120)})
+		e := gamedata.Enchantment{ID: r.u(0), Visual: r.u(120), Condition: r.u(132)}
+		for i := 0; i < 3; i++ {
+			e.Effects[i] = r.u(4 + i*4)
+			e.Amounts[i] = r.u(16 + i*4)
+			e.Arguments[i] = r.u(40 + i*4)
+		}
+		data.Enchantments = append(data.Enchantments, e)
 	}); err != nil {
 		return data, err
 	}

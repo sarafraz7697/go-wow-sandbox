@@ -1,5 +1,34 @@
 # World login: protocol coverage and remaining work
 
+Latest corrections: post-logout discard now covers both STATUS_LOGGEDIN and
+STATUS_LOGGEDIN_OR_RECENTLY_LOGGEDOUT (CANCEL_TRADE uses the latter). Account-data
+updates retain their own handler. Login stat calculation and its remaining
+limitations are documented in [character-stats.md](character-stats.md).
+
+## Character loading and logout update
+
+- After a successful release, the session remembers recent logout until the
+  next successful player entry. Late STATUS_LOGGEDIN client packets (including
+  CANCEL_TRADE) are discarded before handler dispatch while in character
+  selection. Their handlers never access the released player. Fresh sessions
+  still reject these packets before login; character selection remains usable.
+- Loading is no longer limited to Human Warrior, level 1, or map 0. Playable
+  race/class combinations and levels 1–70 use the loaded race, class and level
+  tables; both client genders use their race display. Maps must exist in DBC.
+  Level 70 does not require a next-level XP row. The class selects mana/rage/
+  energy presentation; stored power values are loaded, rather than assuming rage.
+- Native bag records (134 words) and ordinary item records (60 words) are read.
+  Backpack, equipped/bank bags, their contents, bank slots and keyring are
+  represented in the self update. Bag slots/contents are reconstructed from
+  character_inventory with owner, capacity and parent checks. Inventory changes
+  are still unsupported and no inventory data is rewritten on logout.
+- This expands character **loading**, not character creation or all class game
+  mechanics. Gear/aura-derived stats, forms, pets, death/revival, instance state,
+  taxi restoration and pending rename/reset operations are not implemented.
+  Invalid data and unsupported pending-login operations still reject entry.
+  Existing health/mana maximum calculations remain base-stat approximations.
+- No tests, build or server execution were performed for these changes.
+
 ## Local movement update
 
 The stationary restriction described in the original audit below has now been

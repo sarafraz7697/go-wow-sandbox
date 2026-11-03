@@ -13,12 +13,19 @@ import (
 // InitialSelfUpdate sends only this player's objects. No shared world state or
 // visibility is implied. Indices are generated from the pinned UpdateFields.h.
 func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32) (world.Packet, error) {
+	if _, ok := data.Map(p.Map); !ok {
+		return world.Packet{}, character.ErrPlayerUnsupported
+	}
 	race, ok := data.Race(uint32(p.Race))
 	if !ok {
 		return world.Packet{}, character.ErrPlayerUnsupported
 	}
-	level, ok := data.Level(uint32(p.Race), uint32(p.Class), uint32(p.Level))
-	if !ok {
+	class, ok := data.Class(uint32(p.Class))
+	if !ok || class.Power > 4 || p.Gender > 1 {
+		return world.Packet{}, character.ErrPlayerUnsupported
+	}
+	stats := p.Stats
+	if stats == nil {
 		return world.Packet{}, character.ErrPlayerUnsupported
 	}
 	base, ok := data.ClassLevel(uint32(p.Class), uint32(p.Level))
@@ -26,25 +33,29 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 		return world.Packet{}, character.ErrPlayerUnsupported
 	}
 	xp, ok := data.XP(uint32(p.Level))
-	if !ok {
+	if !ok && p.Level < 70 {
 		return world.Packet{}, character.ErrPlayerUnsupported
 	}
 	fields := make([]uint32, f.PLAYER_END)
 	fields[f.OBJECT_FIELD_GUID] = p.GUID
 	fields[f.OBJECT_FIELD_TYPE] = 25
 	fields[f.OBJECT_FIELD_SCALE_X] = math.Float32bits(1)
-	fields[f.UNIT_FIELD_BYTES_0] = uint32(p.Race) | uint32(p.Class)<<8 | uint32(p.Gender)<<16 | 1<<24
+	fields[f.UNIT_FIELD_BYTES_0] = uint32(p.Race) | uint32(p.Class)<<8 | uint32(p.Gender)<<16 | class.Power<<24
 	fields[f.UNIT_FIELD_LEVEL] = uint32(p.Level)
 	fields[f.UNIT_FIELD_FACTIONTEMPLATE] = race.Faction
-	stamina := level.Stats[2]
-	bonus := stamina
-	if stamina > 20 {
-		bonus = 20 + 10*(stamina-20)
-	}
-	fields[f.UNIT_FIELD_MAXHEALTH] = base.Health + bonus
-	fields[f.UNIT_FIELD_HEALTH] = min(p.Health, base.Health+bonus)
+	fields[f.UNIT_FIELD_MAXHEALTH] = stats.MaxHealth
+	fields[f.UNIT_FIELD_HEALTH] = min(p.Health, stats.MaxHealth)
 	fields[f.UNIT_FIELD_POWER2] = min(p.Rage, 1000)
 	fields[f.UNIT_FIELD_MAXPOWER2] = 1000
+	maxMana := stats.MaxMana
+	fields[f.UNIT_FIELD_POWER1] = min(p.Mana, maxMana)
+	fields[f.UNIT_FIELD_MAXPOWER1] = maxMana
+	fields[f.UNIT_FIELD_POWER3] = min(p.Focus, 100)
+	fields[f.UNIT_FIELD_MAXPOWER3] = 100
+	fields[f.UNIT_FIELD_POWER4] = min(p.Energy, 100)
+	fields[f.UNIT_FIELD_MAXPOWER4] = 100
+	fields[f.UNIT_FIELD_POWER5] = min(p.Happiness, 1000000)
+	fields[f.UNIT_FIELD_MAXPOWER5] = 1000000
 	fields[f.UNIT_FIELD_BASE_HEALTH] = base.Health
 	fields[f.UNIT_FIELD_BASE_MANA] = base.Mana
 	fields[f.UNIT_FIELD_FLAGS] = 8
@@ -58,11 +69,26 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 	}
 	fields[f.UNIT_FIELD_DISPLAYID] = display
 	fields[f.UNIT_FIELD_NATIVEDISPLAYID] = display
-	fields[f.UNIT_FIELD_BASEATTACKTIME] = 2000
-	fields[f.UNIT_FIELD_BASEATTACKTIME+1] = 2000
-	fields[f.UNIT_FIELD_RANGEDATTACKTIME] = 2000
-	for i, v := range level.Stats {
+	fields[f.UNIT_FIELD_BASEATTACKTIME] = stats.AttackTime[0]
+	fields[f.UNIT_FIELD_BASEATTACKTIME+1] = stats.AttackTime[1]
+	fields[f.UNIT_FIELD_RANGEDATTACKTIME] = stats.AttackTime[2]
+	for i, v := range stats.Attributes {
 		fields[f.UNIT_FIELD_STAT0+i] = v
+		fields[f.PLAYER_FIELD_POSSTAT0+i] = stats.Positive[i]
+		fields[f.PLAYER_FIELD_NEGSTAT0+i] = stats.Negative[i]
+	}
+	for i, v := range stats.Resistances {
+		fields[f.UNIT_FIELD_RESISTANCES+i] = v
+	}
+	fields[f.UNIT_FIELD_ATTACK_POWER] = uint32(stats.AttackPower)
+	fields[f.UNIT_FIELD_RANGED_ATTACK_POWER] = uint32(stats.RangedAttackPower)
+	fields[f.PLAYER_SHIELD_BLOCK] = stats.ShieldBlock
+	for i, at := range []int{f.UNIT_FIELD_MINDAMAGE, f.UNIT_FIELD_MINOFFHANDDAMAGE, f.UNIT_FIELD_MINRANGEDDAMAGE} {
+		fields[at] = math.Float32bits(stats.DamageMin[i])
+		fields[at+1] = math.Float32bits(stats.DamageMax[i])
+	}
+	for i := 0; i < 7; i++ {
+		fields[f.PLAYER_FIELD_MOD_DAMAGE_DONE_PCT+i] = math.Float32bits(1)
 	}
 	fields[f.PLAYER_FLAGS] = p.PlayerFlags
 	fields[f.PLAYER_BYTES] = p.PlayerBytes
@@ -82,16 +108,57 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 		fields[f.PLAYER_SKILL_INFO_1_1+i*3+1] = v.Value | v.Max<<16
 	}
 	w := wire.NewWriter(MaxServerPayload)
+	items := make(map[uint32]character.PlayerItem, len(p.Items))
+	for _, item := range p.Items {
+		if _, duplicate := items[item.GUID]; duplicate {
+			return world.Packet{}, character.ErrPlayerUnsupported
+		}
+		items[item.GUID] = item
+	}
 	w.Uint32(uint32(1 + len(p.Items)))
 	w.Uint8(0)
 	for _, item := range p.Items {
-		if _, ok := data.ItemDetails(item.Entry); !ok {
+		details, ok := data.ItemDetails(item.Entry)
+		if !ok {
 			return world.Packet{}, character.ErrPlayerUnsupported
 		}
+		itemFields := append([]uint32(nil), item.Fields[:]...)
+		objectType := uint8(1)
+		if details.ContainerSlots > 0 {
+			if details.ContainerSlots > 36 || item.Bag != 0 {
+				return world.Packet{}, character.ErrPlayerUnsupported
+			}
+			objectType = 2
+			itemFields = append(itemFields, make([]uint32, f.CONTAINER_END-f.ITEM_END)...)
+			itemFields[f.OBJECT_FIELD_TYPE] = 7
+			itemFields[f.CONTAINER_FIELD_NUM_SLOTS] = details.ContainerSlots
+			for _, child := range p.Items {
+				if child.Bag == item.GUID {
+					if uint32(child.Slot) >= details.ContainerSlots {
+						return world.Packet{}, character.ErrPlayerUnsupported
+					}
+					at := f.CONTAINER_FIELD_SLOT_1 + int(child.Slot)*2
+					itemFields[at], itemFields[at+1] = child.GUID, 0x40000000
+				}
+			}
+		}
 		guid := uint64(item.GUID) | uint64(0x40000000)<<32
-		fields[f.PLAYER_FIELD_INV_SLOT_HEAD+int(item.Slot)*2] = item.GUID
-		fields[f.PLAYER_FIELD_INV_SLOT_HEAD+int(item.Slot)*2+1] = 0x40000000
-		if item.Slot < 19 {
+		if item.Bag == 0 {
+			if item.Slot >= 118 {
+				return world.Packet{}, character.ErrPlayerUnsupported
+			}
+			fields[f.PLAYER_FIELD_INV_SLOT_HEAD+int(item.Slot)*2] = item.GUID
+			fields[f.PLAYER_FIELD_INV_SLOT_HEAD+int(item.Slot)*2+1] = 0x40000000
+			itemFields[f.ITEM_FIELD_CONTAINED], itemFields[f.ITEM_FIELD_CONTAINED+1] = p.GUID, 0
+		} else {
+			parent, exists := items[item.Bag]
+			parentDetails, valid := data.ItemDetails(parent.Entry)
+			if !exists || !valid || parent.Bag != 0 || uint32(item.Slot) >= parentDetails.ContainerSlots {
+				return world.Packet{}, character.ErrPlayerUnsupported
+			}
+			itemFields[f.ITEM_FIELD_CONTAINED], itemFields[f.ITEM_FIELD_CONTAINED+1] = item.Bag, 0x40000000
+		}
+		if item.Bag == 0 && item.Slot < 19 {
 			at := f.PLAYER_VISIBLE_ITEM_1_0 + int(item.Slot)*16
 			fields[at] = item.Entry
 			for i := 0; i < 7; i++ {
@@ -101,11 +168,11 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 		}
 		w.Uint8(2)
 		w.PackedGUID(guid)
-		w.Uint8(1)
+		w.Uint8(objectType)
 		w.Uint8(0x18)
 		w.Uint32(item.GUID)
 		w.Uint32(0x4000)
-		writeValues(w, item.Fields[:])
+		writeValues(w, itemFields)
 	}
 	w.Uint8(3)
 	w.PackedGUID(uint64(p.GUID))

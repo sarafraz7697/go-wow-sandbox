@@ -111,6 +111,7 @@ type Catalog struct {
 func (c *Catalog) Summary() Summary              { return c.summary }
 func (c *Catalog) Race(id uint32) (Race, bool)   { v, ok := c.races[id]; return v, ok }
 func (c *Catalog) Class(id uint32) (Class, bool) { v, ok := c.classes[id]; return v, ok }
+func (c *Catalog) Map(id uint32) (Map, bool)     { v, ok := c.maps[id]; return v, ok }
 func (c *Catalog) Item(id uint32) (Item, bool)   { v, ok := c.items[id]; return v, ok }
 func (c *Catalog) Start(race, class uint32) (Start, bool) {
 	v, ok := c.starts[Pair{race, class}]

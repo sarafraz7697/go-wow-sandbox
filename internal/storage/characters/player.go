@@ -51,8 +51,11 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	if err != nil {
 		return nil, err
 	}
-	if p.Race != 1 || p.Class != 1 || p.Level != 1 || p.Gender > 1 || p.Map != 0 || p.Health == 0 || p.PlayerFlags&0x10 != 0 || p.AtLogin & ^uint32(32) != 0 {
+	if p.Gender > 1 || p.Level == 0 || p.Level > 70 || p.AtLogin & ^uint32(32) != 0 {
 		return nil, character.ErrPlayerUnsupported
+	}
+	if err = tx.QueryRowContext(ctx, "SELECT power1,power3,power4,power5 FROM characters WHERE guid=?", guid).Scan(&p.Mana, &p.Focus, &p.Energy, &p.Happiness); err != nil {
+		return nil, err
 	}
 	for _, v := range []float32{p.X, p.Y, p.Z, p.Orientation} {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) || math.Abs(float64(v)) > 100000 {
@@ -123,18 +126,20 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	}); err != nil {
 		return nil, err
 	}
-	slots := map[uint8]bool{}
-	if err = read(`SELECT i.item,i.item_template,i.bag,i.slot,COALESCE(o.owner_guid,0),COALESCE(o.data,'') FROM character_inventory i LEFT JOIN item_instance o ON o.guid=i.item WHERE i.guid=? ORDER BY i.slot`, 39, func(r *sql.Rows) error {
+	slots := map[uint64]bool{}
+	if err = read(`SELECT i.item,i.item_template,i.bag,i.slot,COALESCE(o.owner_guid,0),COALESCE(o.data,'') FROM character_inventory i LEFT JOIN item_instance o ON o.guid=i.item WHERE i.guid=? ORDER BY i.bag,i.slot`, 514, func(r *sql.Rows) error {
 		var v character.PlayerItem
 		var bag, owner uint32
 		var data string
 		if e := r.Scan(&v.GUID, &v.Entry, &bag, &v.Slot, &owner, &data); e != nil {
 			return e
 		}
-		if bag != 0 || v.Slot >= 39 || (v.Slot >= 19 && v.Slot < 23) || owner != guid || slots[v.Slot] || len(data) > 2048 {
+		key := uint64(bag)<<8 | uint64(v.Slot)
+		if (bag == 0 && (v.Slot >= 118 || (v.Slot >= 74 && v.Slot < 86))) || (bag != 0 && v.Slot >= 36) || owner != guid || slots[key] || len(data) > 4096 {
 			return character.ErrPlayerUnsupported
 		}
-		slots[v.Slot] = true
+		slots[key] = true
+		v.Bag = bag
 		var err error
 		v.Fields, err = mangosone8606.DecodeItem(data, v.GUID, v.Entry, guid)
 		if err != nil {
