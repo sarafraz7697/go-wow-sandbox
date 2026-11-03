@@ -1,4 +1,4 @@
-package tbc
+package codec
 
 import (
 	"wowserver/internal/protocol/wire"
@@ -8,7 +8,7 @@ import (
 
 // Stateless screen responses. Handler intercepts CHAR_ENUM and replaces the
 // empty baseline with the account's stored list and handles CREATE separately.
-func characterScreenPacket(p world.Packet) (*world.Packet, error) {
+func CharacterScreenPacket(p world.Packet) (*world.Packet, error) {
 	r := wire.NewReader(p.Payload)
 	var response world.Packet
 	switch p.Opcode {
@@ -45,7 +45,7 @@ func characterScreenPacket(p world.Packet) (*world.Packet, error) {
 		r.Uint64()
 		response = world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x46}}
 	default:
-		return nil, errWorldPacket
+		return nil, ErrWorldPacket
 	}
 	if err := r.Finish(); err != nil {
 		return nil, err

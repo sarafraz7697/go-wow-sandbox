@@ -1,0 +1,139 @@
+package tbc
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"wowserver/internal/account"
+	"wowserver/internal/protocol/world"
+	"wowserver/internal/protocol/world/tbc/codec"
+	op "wowserver/internal/protocol/world/tbc/opcodes"
+)
+
+type State uint8
+
+const (
+	StateAuthed State = iota
+	StateLoggingIn
+	StateInWorld
+	StateLoggingOut
+	StateClosed
+)
+
+type transition struct {
+	next   State
+	result chan error
+}
+
+// Session is owned by its event loop. Readers and world workers must not read
+// or mutate state directly. Handler.active remains a separate admission registry.
+type Session struct {
+	state    State
+	account  account.WorldSession
+	name, ip string
+	log      *slog.Logger
+	events   chan transition
+	done     <-chan struct{}
+}
+
+func (s *Session) transition(next State) error {
+	valid := next == StateClosed && s.state != StateClosed
+	switch s.state {
+	case StateAuthed:
+		valid = valid || next == StateLoggingIn
+	case StateLoggingIn:
+		valid = valid || next == StateAuthed || next == StateInWorld
+	case StateInWorld:
+		valid = valid || next == StateLoggingOut
+	case StateLoggingOut:
+		valid = valid || next == StateAuthed || next == StateInWorld
+	}
+	if !valid {
+		return fmt.Errorf("invalid session transition %d -> %d", s.state, next)
+	}
+	s.state = next
+	return nil
+}
+
+// RequestTransition is for external workers, never the owning event loop.
+// After enqueue, wait for its definitive result (or session shutdown) so a
+// caller cannot mistake cancellation for a transition that did not happen.
+func (s *Session) RequestTransition(ctx context.Context, next State) error {
+	request := transition{next: next, result: make(chan error, 1)}
+	select {
+	case s.events <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return context.Canceled
+	}
+	select {
+	case err := <-request.result:
+		return err
+	case <-s.done:
+		return context.Canceled
+	}
+}
+
+type handlerFunc func(context.Context, *Session, world.Packet) (*world.Packet, error)
+type route struct {
+	states []State
+	handle handlerFunc
+}
+type Router struct{ routes map[uint32]route }
+
+func (r *Router) dispatch(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+	entry, ok := r.routes[p.Opcode]
+	if !ok {
+		return nil, codec.ErrWorldPacket
+	}
+	for _, state := range entry.states {
+		if state == s.state {
+			return entry.handle(ctx, s, p)
+		}
+	}
+	return nil, codec.ErrWorldPacket
+}
+
+// Explicit allowlist: reference opcode metadata is descriptive, not permission
+// to execute an unimplemented handler or to start a goroutine per packet.
+func (h *Handler) newRouter() *Router {
+	r := &Router{routes: map[uint32]route{}}
+	check := func(ctx context.Context, s *Session) error {
+		current, err := h.lookup(ctx, s.name, s.ip)
+		if err != nil || !sameSession(s.account, current) {
+			return account.ErrChanged
+		}
+		return nil
+	}
+	r.routes[op.CMSG_CHAR_ENUM] = route{[]State{StateAuthed}, func(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if len(p.Payload) != 0 {
+			return nil, codec.ErrWorldPacket
+		}
+		if err := check(ctx, s); err != nil {
+			return nil, err
+		}
+		return h.characterList(ctx, s.account, s.name, s.ip, s.log)
+	}}
+	r.routes[op.CMSG_CHAR_CREATE] = route{[]State{StateAuthed}, func(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if err := check(ctx, s); err != nil {
+			return nil, err
+		}
+		return h.createCharacter(ctx, s.account, s.ip, p, s.log)
+	}}
+	stateless := func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
+		return codec.CharacterScreenPacket(p)
+	}
+	for _, opcode := range []uint32{op.CMSG_CHAR_DELETE, op.CMSG_PLAYER_LOGIN, op.CMSG_REALM_SPLIT} {
+		r.routes[opcode] = route{[]State{StateAuthed}, stateless}
+	}
+	live := []State{StateAuthed, StateLoggingIn, StateInWorld, StateLoggingOut}
+	r.routes[op.CMSG_KEEP_ALIVE] = route{live, stateless}
+	r.routes[op.CMSG_PING] = route{live, func(ctx context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if err := check(ctx, s); err != nil {
+			return nil, err
+		}
+		return codec.CharacterScreenPacket(p)
+	}}
+	return r
+}

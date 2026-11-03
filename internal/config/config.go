@@ -61,10 +61,6 @@ func Parse(args []string, output io.Writer) (Config, error) {
 	return parse(args, output, "realmd", "configs/realmd.conf", "127.0.0.1:3724")
 }
 
-func ParseWorld(args []string, output io.Writer) (Config, error) {
-	return parse(args, output, "worldd", "configs/worldd.conf", "127.0.0.1:8085")
-}
-
 func parse(args []string, output io.Writer, service, defaultPath, defaultListen string) (Config, error) {
 	var c Config
 	c.RealmID, c.SendQueue = 1, 64
@@ -105,7 +101,7 @@ func parse(args []string, output io.Writer, service, defaultPath, defaultListen 
 		return c, err
 	}
 	c.applyCLI(cli, visited)
-	err = c.validate()
+	err = c.validate(service == "worldd")
 	return c, err
 }
 func (c *Config) applyEnvironment() error {
@@ -153,8 +149,8 @@ func (c *Config) applyCLI(cli Config, visited map[string]bool) {
 		}
 	}
 }
-func (c *Config) validate() error {
-	if c.DBCPath == "" || c.DBCLocale < 0 || c.DBCLocale > 15 || c.DataLoadTimeout <= 0 {
+func (c *Config) validate(world bool) error {
+	if world && (c.DBCPath == "" || c.DBCLocale < 0 || c.DBCLocale > 15 || c.DataLoadTimeout <= 0) {
 		return fmt.Errorf("invalid data dbc_path, dbc_locale or load_timeout")
 	}
 	c.Debug = c.LogLevel == "debug"
@@ -167,10 +163,14 @@ func (c *Config) validate() error {
 	if c.MaxConnections < 1 || c.AuthTimeout <= 0 || c.IdleTimeout <= 0 || c.RequestTimeout <= 0 {
 		return fmt.Errorf("connection limit and timeout must be positive")
 	}
-	if c.RealmID == 0 || c.SendQueue < 1 || c.SendQueue > 1024 {
+	if world && (c.RealmID == 0 || c.SendQueue < 1 || c.SendQueue > 1024) {
 		return fmt.Errorf("invalid world realm_id or send_queue (1..1024)")
 	}
-	for _, d := range []Database{c.Database, c.CharacterDatabase, c.WorldDatabase} {
+	databases := []Database{c.Database}
+	if world {
+		databases = append(databases, c.CharacterDatabase, c.WorldDatabase)
+	}
+	for _, d := range databases {
 		if d.Host == "" || d.Port < 1 || d.Port > 65535 || d.Name == "" || d.User == "" {
 			return fmt.Errorf("invalid database settings")
 		}

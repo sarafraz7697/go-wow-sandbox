@@ -16,6 +16,7 @@ import (
 	mysql "github.com/go-sql-driver/mysql"
 	"wowserver/internal/account"
 	"wowserver/internal/character"
+	"wowserver/internal/storage/characters/mangosone8606"
 )
 
 type Creator struct {
@@ -23,11 +24,15 @@ type Creator struct {
 	db          *sql.DB
 	login, lock string
 	realm       uint32
+	policy      character.CreationPolicy
 }
 
 // NewCreator requires a single MySQL server so the realm counter participates
 // in the same transaction. No schema or data is changed during this check.
-func (s *Store) NewCreator(ctx context.Context, characterDSN, loginDSN string, realm uint32) (*Creator, error) {
+func (s *Store) NewCreator(ctx context.Context, characterDSN, loginDSN string, realm uint32, policy character.CreationPolicy) (*Creator, error) {
+	if policy.RealmLimit == 0 || policy.AccountLimit == 0 {
+		return nil, fmt.Errorf("creation policy requires positive limits")
+	}
 	c, err := mysql.ParseDSN(characterDSN)
 	if err != nil {
 		return nil, fmt.Errorf("invalid character DSN")
@@ -60,7 +65,7 @@ func (s *Store) NewCreator(ctx context.Context, characterDSN, loginDSN string, r
 	}
 	rows.Close()
 	sum := sha256.Sum256([]byte(c.DBName))
-	return &Creator{db: s.DB, login: login, realm: realm, lock: fmt.Sprintf("wow-create-%x", sum[:20])}, nil
+	return &Creator{db: s.DB, login: login, realm: realm, policy: policy, lock: fmt.Sprintf("wow-create-%x", sum[:20])}, nil
 }
 
 func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string, p character.Creation) (uint32, error) {
@@ -142,29 +147,24 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE account=? AND (deleteDate IS NULL OR deleteDate=0)", a.ID).Scan(&count); err != nil {
 		return 0, err
 	}
-	if count >= 10 {
-		return 0, character.ErrRealmFull
-	}
+
 	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(numchars),0) FROM "+s.login+"realmcharacters WHERE acctid=? AND realmid<>?", a.ID, s.realm).Scan(&other); err != nil {
 		return 0, err
 	}
-	if uint64(count)+uint64(other) >= 50 {
-		return 0, character.ErrAccountFull
-	}
+
 	var exists bool
 	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE name=?)", p.Request.Name).Scan(&exists); err != nil {
 		return 0, err
 	}
-	if exists {
-		return 0, character.ErrNameInUse
-	}
-	if icon == 1 || icon == 6 {
+	facts := character.CreationFacts{RealmCount: count, OtherRealmsCount: other, NameTaken: exists, RealmIcon: icon}
+	{
 		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE account=? AND race IN (2,5,6,8,10) AND (deleteDate IS NULL OR deleteDate=0))", a.ID).Scan(&exists); err != nil {
 			return 0, err
 		}
-		if exists {
-			return 0, character.ErrFaction
-		}
+		facts.HasOpposingFaction = exists
+	}
+	if err = s.policy.Check(facts); err != nil {
+		return 0, err
 	}
 	var next, itemNext uint64
 	mark("allocate_guids")
@@ -243,7 +243,7 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	var inventory [][]any
 	for i, item := range p.Items {
 		id := uint32(itemNext + uint64(i))
-		rows = append(rows, []any{id, guid, itemData(id, guid, item)})
+		rows = append(rows, []any{id, guid, mangosone8606.EncodeItem(id, guid, item)})
 		inventory = append(inventory, []any{guid, item.Slot, id, item.Template.ID})
 	}
 	batch("INSERT INTO item_instance (guid,owner_guid,data,text) VALUES ", "(?,?,?,'')", rows)
@@ -267,28 +267,4 @@ func uints(values []uint32) string {
 		b.WriteByte(' ')
 	}
 	return b.String()
-}
-
-// Build-8606 ITEM_END is 60 words. This is the native MaNGOS item_instance
-// format, not a network object update or a custom inventory representation.
-func itemData(guid, owner uint32, item character.InitialItem) string {
-	v := make([]uint32, 60)
-	v[0] = guid
-	v[1] = 0x40000000
-	v[2] = 3
-	v[3] = item.Template.ID
-	v[4] = math.Float32bits(1)
-	v[6] = owner
-	v[8] = owner
-	v[14] = item.Count
-	v[15] = uint32(item.Template.Duration)
-	for i, c := range item.Template.Charges {
-		v[16+i] = uint32(c)
-	}
-	if item.Template.Bonding == 1 || item.Template.Bonding == 4 || (item.Template.Bonding == 2 && item.Slot < 19) {
-		v[21] = 1
-	}
-	v[58] = item.Template.MaxDurability
-	v[59] = item.Template.MaxDurability
-	return uints(v)
 }

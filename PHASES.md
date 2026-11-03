@@ -90,7 +90,7 @@ loader شش DBC، جدول‌های اولیهٔ mangos1 و Catalog فقط‌خ�
 واقعی ساخته نشده است. طبق درخواست کاربر هیچ تست، build یا اجرای سرور انجام نشده؛
 کاربر نمایش واقعی را تأیید کرده و تست بیشتر نخواسته است. جزئیات در `docs/characters.md`.
 
-## فاز ۸ — ساخت کاراکتر (پیاده‌سازی؛ هنوز اجرا و تست نشده)
+## فاز ۸ — ساخت کاراکتر (مسیر موفق تأییدشده با کلاینت اصلی)
 
 - `CMSG_CHAR_CREATE`: اعتبارسنجی نام، تکراری‌بودن، ترکیب نژاد/کلاس/ظاهر، محدودیت‌های حساب و realm.
 - تخصیص GUID، درج در `characters`، `item_instance`، `character_inventory`، `character_spell`، `character_action`، `character_skills`، `character_reputation`، `character_homebind` — همه در یک transaction.
@@ -100,8 +100,21 @@ loader شش DBC، جدول‌های اولیهٔ mangos1 و Catalog فقط‌خ�
 معیار پایان: کاراکتر ساخته شود، در لیست بماند و پس از ری‌استارت باقی باشد؛ شکست هیچ دادهٔ نیمه‌کاره نگذارد.
 
 ساخت Human Warrior با هر دو جنسیت، اعتبارسنجی، داده‌های اولیه و تراکنش مشترک
-characters/login اضافه شده است. معیار پایان هنوز با اجرا تأیید نشده؛ تست، build و
-اجرای سرور انجام نشده است. جزئیات و محدودیت‌ها در `docs/character-creation.md`.
+characters/login اضافه شده است. کاربر ساخت و نمایش را با کلاینت اصلی تأیید کرد؛
+زمان storage پس از درج گروهی به حدود ۶۷۷ms رسید. ماندگاری پس از restart کلاینت واقعی
+هنوز جداگانه گزارش نشده است. جزئیات و محدودیت‌ها در `docs/character-creation.md`.
+
+## فاز ۸٫۵ — بازآرایی معماری (انجام‌شده؛ بررسی خودکار موفق)
+
+- Session با مالکیت صریح state، حلقهٔ رویداد و Router مبتنی بر حالت.
+- codec خالص world، سرویس ساخت و policy روی facts داخل همان transaction.
+- adapter صریح mangosone8606 برای رکورد آیتم.
+- RealmdConfig/WorldConfig و راه‌اندازی سرویس‌ها در internal/app.
+- تست رقابت نام، آخرین جایگاه، سقف حساب، session نامعتبر و rollback مرحلهٔ میانی/نهایی.
+- go test -race با دیتابیس مجزای آزمایشی، go vet و build موفق.
+
+جزئیات و محدودیت‌ها در `docs/phase-8.5.md`. cmd/account و cmd/realm deprecated اما
+برای سازگاری حفظ شده‌اند؛ مسیر پیشنهادی cmd/wowctl است. فاز ۹ شروع نشده است.
 
 ## فاز ۹ — ورود حداقلی به جهان
 

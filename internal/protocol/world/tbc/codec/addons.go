@@ -1,4 +1,4 @@
-package tbc
+package codec
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ var errAddons = errors.New("invalid addon data")
 
 // The pinned TBC AddonHandler reads name, CRC, unknown uint32, unknown byte
 // repeatedly (no count prefix). Limit decompression, record count and reply size.
-func addonResponse(payload []byte) ([]byte, error) {
+func AddonResponse(payload []byte) ([]byte, error) {
 	if len(payload) < 4 {
 		return nil, errAddons
 	}

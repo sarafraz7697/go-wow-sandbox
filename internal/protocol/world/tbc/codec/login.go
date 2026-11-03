@@ -1,4 +1,4 @@
-package tbc
+package codec
 
 import (
 	"crypto/sha1"
@@ -11,15 +11,15 @@ import (
 	op "wowserver/internal/protocol/world/tbc/opcodes"
 )
 
-const authOK byte = 0x0c
-const authFailed byte = 0x0d
-const authVersionMismatch byte = 0x14
-const authAlreadyOnline byte = 0x1d
+const AuthOK byte = 0x0c
+const AuthFailed byte = 0x0d
+const AuthVersionMismatch byte = 0x14
+const AuthAlreadyOnline byte = 0x1d
 
-var errWorldAuth = errors.New("world authentication rejected")
-var errWorldPacket = errors.New("malformed or out-of-state World packet")
+var ErrWorldAuth = errors.New("world authentication rejected")
+var ErrWorldPacket = errors.New("malformed or out-of-state World packet")
 
-type authRequest struct {
+type AuthRequest struct {
 	Build  uint32
 	Name   string
 	Seed   uint32
@@ -27,9 +27,9 @@ type authRequest struct {
 	Addons []byte
 }
 
-func decodeAuthRequest(payload []byte) (authRequest, error) {
+func DecodeAuthRequest(payload []byte) (AuthRequest, error) {
 	r := wire.NewReader(payload)
-	a := authRequest{Build: r.Uint32()}
+	a := AuthRequest{Build: r.Uint32()}
 	r.Uint32() // server id, unused in reference
 	a.Name = r.CString(16)
 	a.Seed = r.Uint32()
@@ -39,11 +39,11 @@ func decodeAuthRequest(payload []byte) (authRequest, error) {
 		return a, err
 	}
 	if _, err := account.Normalize(a.Name); err != nil {
-		return a, errWorldAuth
+		return a, ErrWorldAuth
 	}
 	return a, nil
 }
-func verifyWorldDigest(a authRequest, serverSeed uint32, key [40]byte) bool {
+func VerifyWorldDigest(a AuthRequest, serverSeed uint32, key [40]byte) bool {
 	h := sha1.New()
 	h.Write([]byte(a.Name))
 	h.Write([]byte{0, 0, 0, 0})
@@ -58,9 +58,9 @@ func verifyWorldDigest(a authRequest, serverSeed uint32, key [40]byte) bool {
 	h.Write(key[:n])
 	return subtle.ConstantTimeCompare(h.Sum(nil), a.Digest[:]) == 1
 }
-func authResponse(code, expansion byte) world.Packet {
+func AuthResponse(code, expansion byte) world.Packet {
 	p := world.Packet{Opcode: op.SMSG_AUTH_RESPONSE, Payload: []byte{code}}
-	if code == authOK {
+	if code == AuthOK {
 		p.Payload = make([]byte, 11)
 		p.Payload[0] = code
 		p.Payload[10] = expansion

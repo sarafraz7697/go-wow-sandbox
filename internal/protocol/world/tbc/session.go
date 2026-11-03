@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"wowserver/internal/account"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/world"
+	"wowserver/internal/protocol/world/tbc/codec"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
 )
 
@@ -25,7 +25,6 @@ type WorldSessionStore interface {
 // It owns a process-local admission registry; it does not model a game world.
 type Handler struct {
 	Creator                     CharacterCreator
-	Creation                    CreationProfile
 	Characters                  CharacterStore
 	Data                        *gamedata.Catalog // Immutable startup snapshot, used by later character phases.
 	Store                       WorldSessionStore
@@ -88,30 +87,30 @@ func (h *Handler) Serve(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 	if p.Opcode != op.CMSG_AUTH_SESSION {
-		return errWorldPacket
+		return codec.ErrWorldPacket
 	}
-	request, err := decodeAuthRequest(p.Payload)
+	request, err := codec.DecodeAuthRequest(p.Payload)
 	if err != nil {
 		return err
 	}
 	log.Debug("world auth request decoded", "stage", "auth_session", "build", request.Build, "addon_bytes", len(request.Addons))
 	fail := func(code byte) error {
 		log.Debug("world authentication rejected", "result_code", code)
-		if err := writer.WritePacket(authResponse(code, 0)); err != nil {
+		if err := writer.WritePacket(codec.AuthResponse(code, 0)); err != nil {
 			return err
 		}
-		return errWorldAuth
+		return codec.ErrWorldAuth
 	}
 	if request.Build != 8606 {
-		return fail(authVersionMismatch)
+		return fail(codec.AuthVersionMismatch)
 	}
 	name, _ := account.Normalize(request.Name)
 	a, err := h.lookup(ctx, name, ip)
 	if err != nil {
-		return fail(authFailed)
+		return fail(codec.AuthFailed)
 	}
-	if !verifyWorldDigest(request, binary.LittleEndian.Uint32(seed[:]), a.Key) {
-		return fail(authFailed)
+	if !codec.VerifyWorldDigest(request, binary.LittleEndian.Uint32(seed[:]), a.Key) {
+		return fail(codec.AuthFailed)
 	}
 	log.Debug("world proof verified", "account_id", a.ID)
 	// Both directions switch only after digest verification. Rejections after
@@ -122,16 +121,16 @@ func (h *Handler) Serve(ctx context.Context, conn net.Conn) error {
 	if err = writer.EnableEncryption(a.Key); err != nil {
 		return err
 	}
-	addons, err := addonResponse(request.Addons)
+	addons, err := codec.AddonResponse(request.Addons)
 	if err != nil {
-		return fail(authFailed)
+		return fail(codec.AuthFailed)
 	}
 	current, err := h.lookup(ctx, name, ip)
 	if err != nil || !sameSession(a, current) {
-		return fail(authFailed)
+		return fail(codec.AuthFailed)
 	}
 	if !h.claim(a.ID) {
-		return fail(authAlreadyOnline)
+		return fail(codec.AuthAlreadyOnline)
 	}
 	defer h.release(a.ID)
 	if h.OnAuthenticated != nil {
@@ -142,7 +141,7 @@ func (h *Handler) Serve(ctx context.Context, conn net.Conn) error {
 	if err = conn.SetWriteDeadline(time.Now().Add(h.RequestTimeout)); err != nil {
 		return err
 	}
-	if err = writer.WritePacket(authResponse(authOK, a.Expansion)); err != nil {
+	if err = writer.WritePacket(codec.AuthResponse(codec.AuthOK, a.Expansion)); err != nil {
 		return err
 	}
 	if err = writer.WritePacket(world.Packet{Opcode: op.SMSG_ADDON_INFO, Payload: addons}); err != nil {
@@ -196,57 +195,36 @@ func (h *Handler) runSession(parent context.Context, conn net.Conn, reader *Read
 			log.Debug("world writer stopped", "error", err)
 		}
 	}()
-	for {
-		if err := conn.SetReadDeadline(time.Now().Add(h.IdleTimeout)); err != nil {
-			return err
-		}
-		source.armed = true
-		p, err := reader.ReadPacket()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		meta, known := op.Lookup(p.Opcode)
-		if !known || meta.Status != op.STATUS_AUTHED {
-			log.Debug("world packet rejected", "opcode", p.Opcode, "name", meta.Name, "reason", "not allowed before player login")
-			return errWorldPacket
-		}
-		log.Debug("world packet received", "opcode", p.Opcode, "name", meta.Name, "bytes", len(p.Payload))
-		if p.Opcode == op.CMSG_CHAR_ENUM || p.Opcode == op.CMSG_PING || p.Opcode == op.CMSG_CHAR_CREATE {
-			current, err := h.lookup(ctx, name, ip)
-			if err != nil || !sameSession(a, current) {
-				return account.ErrChanged
+
+	incoming := make(chan received, 1)
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			err := conn.SetReadDeadline(time.Now().Add(h.IdleTimeout))
+			var p world.Packet
+			if err == nil {
+				source.armed = true
+				p, err = reader.ReadPacket()
+			}
+			select {
+			case incoming <- received{p, err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
 			}
 		}
-		var response *world.Packet
-		switch p.Opcode {
-		case op.CMSG_CHAR_ENUM:
-			if len(p.Payload) != 0 {
-				return errWorldPacket
-			}
-			response, err = h.characterList(ctx, a, name, ip, log)
-		case op.CMSG_CHAR_CREATE:
-			response, err = h.createCharacter(ctx, a, ip, p, log)
-		default:
-			response, err = characterScreenPacket(p)
-		}
-		if err != nil {
-			return err
-		}
-		if response == nil {
-			continue
-		}
-		select {
-		case queue <- *response:
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			return errors.New("world send queue full")
-		}
-	}
+	}()
+	// Joining the reader before returning prevents it retaining the connection.
+	defer func() { cancel(); _ = conn.Close(); <-readerDone }()
+	s := &Session{state: StateAuthed, account: a, name: name, ip: ip, log: log, events: make(chan transition, 8), done: ctx.Done()}
+	defer func() { _ = s.transition(StateClosed) }()
+	router := h.newRouter()
+	return s.run(ctx, router, incoming, queue)
 }
+
 func writeSession(ctx context.Context, conn net.Conn, writer *Writer, queue <-chan world.Packet, timeout time.Duration, log *slog.Logger) error {
 	for {
 		select {
