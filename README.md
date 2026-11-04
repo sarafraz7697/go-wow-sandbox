@@ -1,27 +1,27 @@
-# WoW TBC in Go — پروژهٔ آموزشی و تفریحی
+# WoW TBC in Go — An Educational
 
-این پروژه یک بازپیاده‌سازی تدریجی از بخش‌هایی از سرور **World of Warcraft: The Burning Crusade 2.4.3، build 8606** با Go است؛ برای یادگیری Go، شبکه، پروتکل باینری، دیتابیس و معماری نرم‌افزار، و لذت دیدن نتیجه در کلاینت واقعی.
+This project is a gradual reimplementation of parts of the **World of Warcraft: The Burning Crusade 2.4.3, build 8606** server in Go; for learning Go, networking, binary protocols, databases, and software architecture, and the joy of seeing the result in a real client.
 
-مرجع اصلی رفتار و ساختار داده‌ها **[MaNGOS One](https://github.com/mangosone/server)** است. این پروژه مستقل و غیررسمی است و ادعای پیاده‌سازی کامل MaNGOS، آمادگی production یا وابستگی رسمی به Blizzard یا تیم MaNGOS ندارد.
+The primary reference for behavior and data structures is **[MaNGOS One](https://github.com/mangosone/server)**. This project is independent and unofficial and makes no claim to fully implement MaNGOS, be production-ready, or be officially affiliated with Blizzard or the MaNGOS team.
 
-در حال حاضر احراز هویت، Realm List، فهرست کاراکترها، ساخت تمام race/class‌های موجود در `playercreateinfo`، ورود کاراکترهای موجود و حرکت محلی پیاده شده‌اند. خروج کاراکتر شامل countdown ۲۰ثانیه‌ای، فریز (root + sit) و خروج فوری در محدودهٔ areatrigger_tavern (tavern/rest areas) است. **سیستم broadcast و world simulation** شامل spawn/despawn (CREATE_OBJECT/DESTROY_OBJECT)، visibility-based broadcast، movement echo، NAME_QUERY برای بازیکنان دیگر، SAY/YELL/EMOTE chat broadcast، **chat channels (CMSG_JOIN_CHANNEL/LEAVE_CHANNEL/Say)**، whisper به بازیکنان دیگر و ۱به۱ (SendTo) پیاده شده است. محاسبات stat و بخش‌های combat/spell/quest هنوز در حال تکمیل‌اند.
+Currently, authentication, Realm List, character list, creation of all race/class combinations present in `playercreateinfo`, login of existing characters, and local movement are implemented. Character logout includes a 20-second countdown, freeze (root + sit), and immediate logout within the areatrigger_tavern range (tavern/rest areas). The **broadcast system and world simulation** — including spawn/despawn (CREATE_OBJECT/DESTROY_OBJECT), visibility-based broadcast, movement echo, NAME_QUERY for other players, SAY/YELL/EMOTE chat broadcast, **chat channels (CMSG_JOIN_CHANNEL/LEAVE_CHANNEL/Say)**, whisper to other players, and 1-to-1 (SendTo) — are implemented. Stat calculations and the combat/spell/quest sections are still being completed.
 
-**مستند واحد پروژه:** [PROJECT.md](docs/PROJECT.md) — معماری، راه‌اندازی، وضعیت واقعی امکانات، تفاوت‌ها با مرجع، محدودیت‌ها، شواهد بررسی و قدم بعدی.
+**Single project document:** [PROJECT.md](docs/PROJECT.md) — architecture, setup, actual feature status, differences from the reference, limitations, verification evidence, and next steps.
 
-## شروع سریع
+## Quick Start
 
-پیش‌نیازها: Go مطابق `go.mod` (حداقل 1.24)، دیتابیس‌های سازگار و دارای دادهٔ MaNGOS One، خروجی DBC کلاینت 2.4.3 و کلاینت همان build. SQL دارای schema به‌تنهایی برای اجرای world کافی نیست.
+Prerequisites: Go per `go.mod` (minimum 1.24), compatible databases containing MaNGOS One data, DBC output from the 2.4.3 client, and a client of the same build. SQL containing only the schema is not sufficient to run the world.
 
-از ریشهٔ پروژه، اگر فایل‌های تنظیمات را هنوز نساخته‌اید:
+From the project root, if you haven't created the config files yet:
 
 ```powershell
 Copy-Item configs/realmd.conf.example configs/realmd.conf
 Copy-Item configs/worldd.conf.example configs/worldd.conf
 ```
 
-مشخصات دیتابیس را در فایل‌ها ویرایش کنید و DBCها را در `dbc/` قرار دهید. نمونه‌ها برای محیط توسعهٔ محلی‌اند؛ مشخصات آن‌ها را با محیط خود تطبیق دهید.
+Edit the database specifications in the files and place the DBCs in `dbc/`. The samples are for a local development environment; adapt their specifications to your environment.
 
-دو ترمینال جدا:
+Two separate terminals:
 
 ```powershell
 go run ./cmd/realmd
@@ -31,9 +31,9 @@ go run ./cmd/realmd
 go run ./cmd/worldd
 ```
 
-کلاینت محلی: `set realmlist 127.0.0.1`. رکورد Realm در دیتابیس نیز باید به آدرس و پورت `worldd`، معمولاً `127.0.0.1:8085`، اشاره کند.
+Local client: `set realmlist 127.0.0.1`. The Realm record in the database must also point to the `worldd` address and port, typically `127.0.0.1:8085`.
 
-ابزار مدیریت:
+Management tool:
 
 ```powershell
 go run ./cmd/wowctl account check
@@ -41,14 +41,14 @@ go run ./cmd/wowctl realm list
 go run ./cmd/wowctl account create testgo ExamplePassword123
 ```
 
-ساخت حساب داده می‌نویسد؛ دستور check برای بررسی اتصال و ساختار است. راهنمای دیتابیس و محدودیت اجرای هم‌زمان سرورها در سند جامع آمده است.
+Creating an account writes data; the check command is for verifying connectivity and structure. The database guide and the limitations on running servers concurrently are covered in the comprehensive document.
 
-## مرجع و اعتبار اثر
+## Reference and Attribution
 
-- مرجع اصلی: [mangosone/server](https://github.com/mangosone/server).
-- مرجع تثبیت‌شدهٔ opcodeها و بخش‌هایی از پروتکل: [`b2083578a279aac3a70a2cba8fe710a454324c4e`](https://github.com/mangosone/server/tree/b2083578a279aac3a70a2cba8fe710a454324c4e).
-- فایل‌های مرجع نگه‌داری‌شده و خروجی‌های تولیدشده دارای اعلان‌های copyright و `GPL-3.0-or-later` هستند؛ این اعلان‌ها حفظ شده‌اند. [مجوز upstream](https://github.com/mangosone/server/blob/master/LICENSE) و منشأ دقیق فایل‌ها در سند جامع ذکر شده‌اند.
-- نام‌ها، علائم و محتوای World of Warcraft متعلق به صاحبان مربوطه، از جمله Blizzard Entertainment، هستند. این مخزن مالکیت آن‌ها را ادعا نمی‌کند.
-- DBC، client، MPQ و داده‌های بازی جزو خروجی تألیفی این پروژه محسوب نمی‌شوند. این README برای آن‌ها مجوز بازتوزیع ایجاد نمی‌کند؛ معرفی پروژه به‌عنوان آموزشی نیز جایگزین شرایط مجوز منابع نیست.
+- Primary reference: [mangosone/server](https://github.com/mangosone/server).
+- Pinned reference for opcodes and parts of the protocol: [`b2083578a279aac3a70a2cba8fe710a454324c4e`](https://github.com/mangosone/server/tree/b2083578a279aac3a70a2cba8fe710a454324c4e).
+- Preserved reference files and generated outputs carry copyright notices and `GPL-3.0-or-later`; these notices have been retained. The [upstream license](https://github.com/mangosone/server/blob/master/LICENSE) and the exact origin of the files are noted in the comprehensive document.
+- Names, trademarks, and content of World of Warcraft belong to their respective owners, including Blizzard Entertainment. This repository does not claim ownership of them.
+- DBC, client, MPQ, and game data are not considered authored output of this project. This README does not create redistribution rights for them; presenting the project as educational does not substitute for the terms of the source licenses.
 
-مجوز مستقلی برای تمام کدهای پروژه در این تغییر تعیین نشده است؛ نسبت‌دادن مرجع به‌تنهایی به معنی حل تمام الزامات انتشار نیست. فایل‌های مرجع و اعلان‌های موجود نباید هنگام انتشار حذف شوند.
+No independent license has been designated for all project code in this change; attributing the reference alone does not mean all distribution requirements are resolved. Reference files and existing notices must not be removed upon distribution.
