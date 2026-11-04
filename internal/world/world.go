@@ -168,23 +168,26 @@ func (w *World) Count() int {
 // it does not exist. Returns the channel (so the caller can send notify
 // packets) and the list of existing member senders (so the caller can
 // broadcast the "player joined" notify).
-func (w *World) JoinChannel(name string, guid uint32, sender domainworld.Sender) (*Channel, []domainworld.Sender, bool) {
+//
+// The returned ChannelInfo is nil only when the world is shutting down;
+// the player-entry bookkeeping and the channel map are updated under the
+// same write lock so a concurrent LeaveChannel cannot observe a torn state.
+func (w *World) JoinChannel(name string, guid uint32, sender domainworld.Sender) (domainworld.ChannelInfo, []domainworld.Sender, bool) {
 	w.mu.Lock()
 	ch, ok := w.channels[name]
 	if !ok {
 		ch = newChannel(name, 0)
 		w.channels[name] = ch
 	}
-	w.mu.Unlock()
-	// Track channel membership on the player entry so Unregister can clean up.
-	w.mu.RLock()
+	// Track channel membership on the player entry so the logout cleanup
+	// (Player::CleanupChannels equivalent) can find every joined channel.
 	if e, ok := w.players[guid]; ok {
 		if e.channels == nil {
 			e.channels = make(map[string]bool)
 		}
 		e.channels[name] = true
 	}
-	w.mu.RUnlock()
+	w.mu.Unlock()
 	_, existing := ch.Members()
 	wasNew := ch.Join(guid, sender)
 	return ch, existing, wasNew
@@ -193,32 +196,40 @@ func (w *World) JoinChannel(name string, guid uint32, sender domainworld.Sender)
 // LeaveChannel removes a player from the named channel. Returns the
 // channel (may be nil if it was destroyed) and the remaining member
 // senders (for the "player left" notify).
-func (w *World) LeaveChannel(name string, guid uint32) (*Channel, []domainworld.Sender) {
+func (w *World) LeaveChannel(name string, guid uint32) (domainworld.ChannelInfo, []domainworld.Sender) {
 	w.mu.Lock()
 	ch, ok := w.channels[name]
+	if ok {
+		// Remove channel membership from the player entry under the same
+		// write lock that guards the channel map.
+		if e, ok := w.players[guid]; ok && e.channels != nil {
+			delete(e.channels, name)
+		}
+	}
 	w.mu.Unlock()
 	if !ok {
 		return nil, nil
 	}
 	remaining := ch.Leave(guid)
-	// Remove channel membership from the player entry.
-	w.mu.RLock()
-	if e, ok := w.players[guid]; ok && e.channels != nil {
-		delete(e.channels, name)
-	}
-	w.mu.RUnlock()
-	// Destroy empty channels.
+	// Destroy empty channels. Re-check emptiness under w.mu so a join that
+	// raced with this leave cannot end up registered in a channel that has
+	// just been removed from the map.
 	if ch.Empty() {
 		w.mu.Lock()
-		delete(w.channels, name)
+		if ch.Empty() {
+			delete(w.channels, name)
+			ch = nil
+		}
 		w.mu.Unlock()
-		return nil, remaining
+		if ch == nil {
+			return nil, remaining
+		}
 	}
 	return ch, remaining
 }
 
 // GetChannel returns the channel by name, or nil if it does not exist.
-func (w *World) GetChannel(name string) *Channel {
+func (w *World) GetChannel(name string) domainworld.ChannelInfo {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.channels[name]

@@ -39,22 +39,71 @@ type Handler struct {
 	IdleTimeout, RequestTimeout time.Duration
 	OnAuthenticated             func(context.Context) error
 	mu                          sync.Mutex
-	active                      map[uint64]bool
+	active                      map[uint64]*activeConn
 }
 
-func (h *Handler) claim(id uint64) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.active == nil {
-		h.active = make(map[uint64]bool)
-	}
-	if h.active[id] {
-		return false
-	}
-	h.active[id] = true
-	return true
+// activeConn tracks one admitted account so a duplicate connection can
+// kick the previous session and wait for its release. This mirrors the
+// reference World::AddSession behaviour: the NEW connection wins, the OLD
+// session is deleted and unwinds through its normal cleanup path.
+type activeConn struct {
+	kick func()       // closes the owning session's connection
+	done chan struct{} // closed by release once the session fully unwound
 }
-func (h *Handler) release(id uint64) { h.mu.Lock(); delete(h.active, id); h.mu.Unlock() }
+
+// errAlreadyOnline is returned when the previous session of the account did
+// not unwind within kickWait; the caller answers AUTH_ALREADY_ONLINE.
+var errAlreadyOnline = errors.New("account session still active")
+
+// kickWait bounds how long a new connection waits for the previous session
+// of the same account to save and release. The save path is bounded by
+// RequestTimeout (default 10s), so this covers it plus a grace period.
+const kickWait = 15 * time.Second
+
+// claim admits the account for this connection. If the account is already
+// admitted, the previous session's connection is closed (kick) and the
+// caller waits for it to finish saving and releasing before re-claiming.
+func (h *Handler) claim(id uint64, kick func()) (*activeConn, error) {
+	for {
+		h.mu.Lock()
+		if h.active == nil {
+			h.active = make(map[uint64]*activeConn)
+		}
+		if cur, ok := h.active[id]; ok {
+			oldKick, oldDone := cur.kick, cur.done
+			h.mu.Unlock()
+			// Reference: the old session is kicked, not the new one.
+			if oldKick != nil {
+				oldKick()
+			}
+			if oldDone == nil {
+				continue
+			}
+			timer := time.NewTimer(kickWait)
+			select {
+			case <-oldDone:
+				timer.Stop()
+			case <-timer.C:
+				return nil, errAlreadyOnline
+			}
+			continue
+		}
+		c := &activeConn{kick: kick, done: make(chan struct{})}
+		h.active[id] = c
+		h.mu.Unlock()
+		return c, nil
+	}
+}
+
+// release removes the admission and wakes any waiting duplicate connection.
+func (h *Handler) release(id uint64, c *activeConn) {
+	h.mu.Lock()
+	if cur, ok := h.active[id]; ok && cur == c {
+		delete(h.active, id)
+	}
+	h.mu.Unlock()
+	close(c.done)
+}
 
 func (h *Handler) lookup(ctx context.Context, name, ip string) (account.WorldSession, error) {
 	ctx, cancel := context.WithTimeout(ctx, h.RequestTimeout)
@@ -134,10 +183,11 @@ func (h *Handler) Serve(ctx context.Context, conn net.Conn) error {
 	if err != nil || !sameSession(a, current) {
 		return fail(codec.AuthFailed)
 	}
-	if !h.claim(a.ID) {
+	session, claimErr := h.claim(a.ID, func() { _ = conn.Close() })
+	if claimErr != nil {
 		return fail(codec.AuthAlreadyOnline)
 	}
-	defer h.release(a.ID)
+	defer h.release(a.ID, session)
 	if h.OnAuthenticated != nil {
 		if err = h.OnAuthenticated(ctx); err != nil {
 			return err

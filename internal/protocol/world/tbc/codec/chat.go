@@ -59,9 +59,19 @@ const (
 // MaxChatMessageType from SharedDefines.h (#define MAX_CHAT_MSG_TYPE 0x2F).
 const MaxChatMessageType = 0x2F
 
-// ChatTagFlags from Chat.h ChatTagFlags. We only need CHAT_TAG_NONE (0)
-// for now; GM/AFK/DND tags are future work.
-const ChatTagNone = 0
+// ChatTagFlags from Chat.h ChatTagFlags. AFK/DND tags are set on the
+// sender's chat packets while the corresponding PLAYER_FLAGS bit is on.
+const (
+        ChatTagNone = 0
+        ChatTagAFK  = 0x1
+        ChatTagDND  = 0x2
+)
+
+// PLAYER_FLAGS_AFK / PLAYER_FLAGS_DND from Player.h (reference values).
+const (
+        PlayerFlagsAFK uint32 = 0x00000002
+        PlayerFlagsDND uint32 = 0x00000004
+)
 
 // ErrChatTooLong is returned when a chat message exceeds the 255-byte limit
 // the reference enforces in CheckChatMessage.
@@ -151,7 +161,7 @@ func DecodeChatRequest(payload []byte) (ChatRequest, error) {
 //      uint32 messageLen  (strlen+1, includes null terminator)
 //      bytes  message     (CString: message + null)
 //      uint8  chatTag
-func BuildChatPacket(msgType uint8, language uint32, senderGUID uint64, senderName string, targetGUID uint64, message string) (world.Packet, error) {
+func BuildChatPacket(msgType uint8, language uint32, senderGUID uint64, senderName string, targetGUID uint64, message string, chatTag uint8) (world.Packet, error) {
         if len(message) > 255 {
                 return world.Packet{}, ErrChatTooLong
         }
@@ -167,7 +177,7 @@ func BuildChatPacket(msgType uint8, language uint32, senderGUID uint64, senderNa
         // uint32 length prefix explicitly.
         w.Uint32(uint32(len(message) + 1))
         w.CString(message, 255)
-        w.Uint8(ChatTagNone)
+        w.Uint8(chatTag)
         b, err := w.Result()
         if err != nil {
                 return world.Packet{}, err
@@ -184,7 +194,7 @@ func BuildChatPacket(msgType uint8, language uint32, senderGUID uint64, senderNa
 // Using the wrong type causes the client to drop the packet silently, so
 // the sender never sees their own whisper in chat history.
 func BuildWhisperInform(targetGUID uint64, message string) (world.Packet, error) {
-        return BuildChatPacket(ChatMsgReply, LangUniversal, targetGUID, "", 0, message)
+        return BuildChatPacket(ChatMsgReply, LangUniversal, targetGUID, "", 0, message, ChatTagNone)
 }
 
 // BuildChannelChatPacket builds SMSG_MESSAGECHAT for a CHANNEL message.
@@ -201,7 +211,7 @@ func BuildWhisperInform(targetGUID uint64, message string) (world.Packet, error)
 //      uint32 messageLen
 //      CString message
 //      uint8  chatTag
-func BuildChannelChatPacket(msgType uint8, language uint32, senderGUID uint64, senderName, channelName, message string) (world.Packet, error) {
+func BuildChannelChatPacket(msgType uint8, language uint32, senderGUID uint64, senderName, channelName, message string, chatTag uint8) (world.Packet, error) {
         if len(message) > 255 {
                 return world.Packet{}, ErrChatTooLong
         }
@@ -214,7 +224,7 @@ func BuildChannelChatPacket(msgType uint8, language uint32, senderGUID uint64, s
         w.Uint64(0) // targetGUID for channel
         w.Uint32(uint32(len(message) + 1))
         w.CString(message, 255)
-        w.Uint8(ChatTagNone)
+        w.Uint8(chatTag)
         b, err := w.Result()
         if err != nil {
                 return world.Packet{}, err
@@ -225,7 +235,7 @@ func BuildChannelChatPacket(msgType uint8, language uint32, senderGUID uint64, s
 // BuildSystemMessage builds SMSG_MESSAGECHAT with CHAT_MSG_SYSTEM and
 // LANG_UNIVERSAL. Used for server notifications (e.g. "player not found").
 func BuildSystemMessage(message string) (world.Packet, error) {
-        return BuildChatPacket(ChatMsgSystem, LangUniversal, 0, "", 0, message)
+        return BuildChatPacket(ChatMsgSystem, LangUniversal, 0, "", 0, message, ChatTagNone)
 }
 
 // BuildTextEmote builds SMSG_TEXT_EMOTE.

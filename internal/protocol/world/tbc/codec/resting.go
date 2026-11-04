@@ -62,15 +62,22 @@ func IsPointInAreaTrigger(t gamedata.TavernTrigger, mapID uint32, x, y, z, delta
 //
 // Field index: PLAYER_FLAGS = 236 → block 7, bit 12.
 func RestingStateUpdate(guid uint32, currentFlags uint32, resting bool) (world.Packet, error) {
-	field := uint32(f.PLAYER_FLAGS)
-	blockCount := int(field/32) + 1
-	mask := make([]uint32, blockCount)
-	mask[field/32] |= 1 << (field % 32)
-
 	value := currentFlags &^ PlayerFlagsResting
 	if resting {
 		value |= PlayerFlagsResting
 	}
+	return PlayerFlagsUpdate(guid, value)
+}
+
+// PlayerFlagsUpdate builds a partial SMSG_UPDATE_OBJECT that rewrites the
+// whole PLAYER_FLAGS field. Used for resting and for the AFK/DND toggles
+// (reference: Object::SetFlag/RemoveFlag on PLAYER_FLAGS send exactly this
+// partial values update to the owning client).
+func PlayerFlagsUpdate(guid uint32, flags uint32) (world.Packet, error) {
+	field := uint32(f.PLAYER_FLAGS)
+	blockCount := int(field/32) + 1
+	mask := make([]uint32, blockCount)
+	mask[field/32] |= 1 << (field % 32)
 
 	w := wire.NewWriter(64)
 	w.Uint32(1) // update count
@@ -81,7 +88,7 @@ func RestingStateUpdate(guid uint32, currentFlags uint32, resting bool) (world.P
 	for _, m := range mask {
 		w.Uint32(m)
 	}
-	w.Uint32(value)
+	w.Uint32(flags)
 	b, err := w.Result()
 	if err != nil {
 		return world.Packet{}, err

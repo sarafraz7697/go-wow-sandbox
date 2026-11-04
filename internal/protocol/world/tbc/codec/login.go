@@ -19,6 +19,11 @@ const AuthAlreadyOnline byte = 0x1d
 var ErrWorldAuth = errors.New("world authentication rejected")
 var ErrWorldPacket = errors.New("malformed or out-of-state World packet")
 
+// ErrFatalWorldPacket marks a protocol violation that must END the session
+// (the reference disconnects the client, e.g. a second CMSG_AUTH_SESSION
+// mid-session; ClientConnection rejects it once auth has started).
+var ErrFatalWorldPacket = errors.New("fatal world protocol violation")
+
 type AuthRequest struct {
 	Build  uint32
 	Name   string

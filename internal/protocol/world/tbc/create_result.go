@@ -52,15 +52,23 @@ func CreateResultCode(err error, name string) (code byte, disconnect bool) {
 // DeleteResultCode maps a delete error to the SMSG_CHAR_DELETE response byte.
 // Codes from mangosone/server SharedDefines.h:
 //
-//	CHAR_DELETE_SUCCESS = 0x3B
-//	CHAR_DELETE_FAILED  = 0x3C
+//	CHAR_DELETE_SUCCESS              = 0x3B
+//	CHAR_DELETE_FAILED               = 0x3C
+//	CHAR_DELETE_FAILED_GUILD_LEADER  = 0x3E
+//	CHAR_DELETE_FAILED_ARENA_CAPTAIN = 0x3F
 //
-// Any error (missing, not owned, online) maps to CHAR_DELETE_FAILED.
+// Any other error (missing, not owned, online) maps to CHAR_DELETE_FAILED.
 // Never use 0x49 — that is CHAR_LOGIN_LOCKED_BY_BILLING and shows
 // "character locked, contact support" in the client.
 func DeleteResultCode(err error) byte {
 	if err == nil {
 		return 0x3B
+	}
+	switch {
+	case errors.Is(err, character.ErrGuildLeader):
+		return 0x3E // CHAR_DELETE_FAILED_GUILD_LEADER
+	case errors.Is(err, character.ErrArenaCaptain):
+		return 0x3F // CHAR_DELETE_FAILED_ARENA_CAPTAIN
 	}
 	return 0x3C
 }

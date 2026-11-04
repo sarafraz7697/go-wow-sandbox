@@ -70,7 +70,8 @@ func CharacterScreenPacket(p world.Packet) (*world.Packet, error) {
 		response = world.Packet{Opcode: op.SMSG_CHAR_DELETE, Payload: []byte{0x3C}}
 	case op.CMSG_PLAYER_LOGIN:
 		r.Uint64()
-		response = world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x46}}
+		// 0x45 = CHAR_LOGIN_FAILED; 0x46 is CHAR_LOGIN_DISABLED.
+		response = world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x45}}
 	default:
 		return nil, ErrWorldPacket
 	}

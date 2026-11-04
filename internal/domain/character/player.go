@@ -7,6 +7,11 @@ import "errors"
 var ErrPlayerUnavailable = errors.New("character unavailable for world login")
 var ErrPlayerUnsupported = errors.New("character data or pending login operation is not supported")
 
+// Delete guards mirroring HandleCharDeleteOpcode's early rejections: a guild
+// leader or an arena team captain is refused before any row is touched.
+var ErrGuildLeader = errors.New("character is a guild leader")
+var ErrArenaCaptain = errors.New("character is an arena team captain")
+
 // Player is a session-owned snapshot. Local movement is applied by the movement
 // use case after packet/bounds validation; there is no authoritative simulation.
 type Player struct {

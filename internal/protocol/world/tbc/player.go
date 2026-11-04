@@ -29,8 +29,9 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	fail := func() (*world.Packet, error) {
 		// The client tears down its tentative world UI after a rejected login
 		// too, and may flush CANCEL_TRADE before returning to character selection.
+		// 0x45 = CHAR_LOGIN_FAILED (the generic failure; 0x46 is DISABLED).
 		s.recentlyLoggedOut = true
-		return &world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x46}}, nil
+		return &world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x45}}, nil
 	}
 	if h.Players == nil || h.Data == nil || guid == 0 || guid>>32 != 0 {
 		return fail()
@@ -141,6 +142,10 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 		return err
 	}
 	s.log.Info("player saved and released", "guid", s.player.GUID, "played_seconds", seconds)
+	// Leave every joined chat channel before the despawn flow (reference:
+	// LogoutPlayer calls CleanupChannels; remaining members get the LEFT
+	// notice, the leaving player gets nothing).
+	h.leaveAllChannels(s)
 	// Despawn flow: broadcast DESTROY_OBJECT to nearby players so they
 	// stop rendering this player. Must happen before Unregister, while
 	// the player is still in the world registry.
@@ -390,17 +395,13 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 
 // joinChannel adds the session's player to a chat channel and sends the
 // notify packets. Mirrors Channel::Join + MakeYouJoined + MakeJoined.
+// The channel registry is the domain contract satisfied by the world
+// simulation; asserting the concrete per-method interfaces that were here
+// before never matched *world.World's method signatures (a *Channel return
+// does not satisfy an interface method returning interface{...}), so every
+// join silently did nothing.
 func (h *Handler) joinChannel(s *Session, name string, channelID uint32) {
-	type channelWorld interface {
-		JoinChannel(string, uint32, domainworld.Sender) (interface {
-			Name() string
-			Flags() uint8
-			Count() int
-			IsMember(uint32) bool
-			Empty() bool
-		}, []domainworld.Sender, bool)
-	}
-	w, ok := h.Broadcast.(channelWorld)
+	w, ok := h.Broadcast.(domainworld.ChannelRegistry)
 	if !ok {
 		return
 	}
@@ -421,15 +422,10 @@ func (h *Handler) joinChannel(s *Session, name string, channelID uint32) {
 }
 
 // leaveChannel removes the session's player from a chat channel and sends
-// the notify packets. Mirrors Channel::Leave + MakeYouLeft + MakeLeft.
+// the notify packets. Mirrors Channel::Leave(send=true) + MakeYouLeft +
+// MakeLeft: the leaving player gets YOU_LEFT, the others get LEFT.
 func (h *Handler) leaveChannel(s *Session, name string) {
-	type channelWorld interface {
-		LeaveChannel(string, uint32) (interface {
-			Name() string
-			Count() int
-		}, []domainworld.Sender)
-	}
-	w, ok := h.Broadcast.(channelWorld)
+	w, ok := h.Broadcast.(domainworld.ChannelRegistry)
 	if !ok {
 		return
 	}
@@ -444,6 +440,28 @@ func (h *Handler) leaveChannel(s *Session, name string) {
 	}
 	if ch != nil {
 		s.log.Debug("player left channel", "channel", name, "guid", s.player.GUID, "members", ch.Count())
+	}
+}
+
+// leaveAllChannels removes the player from every joined channel during
+// logout/disconnect. Mirrors Player::CleanupChannels: the LEFT notice is
+// broadcast to the remaining members, but the leaving player is NOT sent
+// YOU_LEFT (Channel::Leave is called with send=false during cleanup).
+func (h *Handler) leaveAllChannels(s *Session) {
+	if s.player == nil {
+		return
+	}
+	w, ok := h.Broadcast.(domainworld.ChannelRegistry)
+	if !ok {
+		return
+	}
+	for _, name := range w.PlayerChannels(s.player.GUID) {
+		_, remaining := w.LeaveChannel(name, s.player.GUID)
+		notify := codec.BuildChannelNotifyLeft(name, s.player.GUID)
+		for _, rs := range remaining {
+			rs.TrySend(domainworld.Packet{Opcode: notify.Opcode, Payload: notify.Payload})
+		}
+		s.log.Debug("player left channel on cleanup", "channel", name, "guid", s.player.GUID)
 	}
 }
 
@@ -586,18 +604,21 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		}
 		s.logoutAt = time.Now().Add(20 * time.Second)
 		s.log.Debug("logout countdown started", "guid", s.player.GUID)
-		// Reference: HandleLogoutRequestOpcode sits the player and roots them
-		// before starting the countdown, so the client cannot move while the
-		// countdown ticks. We mirror MaNGOS exactly:
+		// Reference: HandleLogoutRequestOpcode sends SMSG_LOGOUT_RESPONSE
+		// FIRST, then sits the player and roots them so the client cannot move
+		// while the countdown ticks:
+		//   SMSG_LOGOUT_RESPONSE (reason=0, instant=0)
 		//   SetStandState(UNIT_STAND_STATE_SIT)  -> partial UPDATE_OBJECT + SMSG_STANDSTATE_UPDATE
 		//   SetRoot(true)                         -> SMSG_FORCE_MOVE_ROOT
 		//   UNIT_FLAG_STUNNED                      -> intentionally NOT set here; the
 		//      reference sets it together with SetRoot, but without a virtual-item /
 		//      sheath pipeline the stunned flag makes the client draw weapons.
+		// The response is sent through the same queue so the wire order is
+		// response, sit, root (returning it would queue it last).
+		_ = s.send(codec.LogoutResponse(0, false))
 		h.sendLogoutStandState(s, codec.StandStateSit)
-		s.send(codec.ForceMoveRoot(s.player.GUID))
-		resp := codec.LogoutResponse(0, false)
-		return &resp, nil
+		_ = s.send(codec.ForceMoveRoot(s.player.GUID))
+		return nil, nil
 	}}
 	router.routes[op.CMSG_LOGOUT_CANCEL] = route{[]State{StateLoggingOut, StateInWorld}, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		if len(p.Payload) != 0 {
@@ -608,12 +629,14 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 			if e := s.transition(StateInWorld); e != nil {
 				return nil, e
 			}
-			// Reference: HandleLogoutCancelOpcode stands the player up and
-			// removes the root before the cancel ack is sent.
+			// Reference: HandleLogoutCancelOpcode sends SMSG_LOGOUT_CANCEL_ACK
+			// first, then unroots the player and stands them up.
+			_ = s.send(world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK})
 			if s.player != nil {
+				_ = s.send(codec.ForceMoveUnroot(s.player.GUID))
 				h.sendLogoutStandState(s, codec.StandStateStand)
-				s.send(codec.ForceMoveUnroot(s.player.GUID))
 			}
+			return nil, nil
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
 	}}
@@ -814,7 +837,6 @@ func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) 
 	if err != nil {
 		return nil, err
 	}
-	moved := position.X != s.player.X || position.Y != s.player.Y || position.Z != s.player.Z
 	if err = movement.Apply(s.player, position); err != nil {
 		return nil, err
 	}
@@ -832,25 +854,11 @@ func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) 
 		payload := codec.EncodeMovementBroadcast(s.player.GUID, p.Payload)
 		h.Broadcast.Broadcast(s.player.GUID, domainworld.Packet{Opcode: p.Opcode, Payload: payload}, false)
 	}
-	// Movement cancels the pending logout. The reference's CanFreeMove guard
-	// means the rooted client should not send movement, but the server still
-	// honours a stop/heartbeat that follows the client's own input. We stand
-	// the player up AND remove the root, mirroring HandleLogoutCancelOpcode.
-	if s.state == StateLoggingOut && (moved || p.Opcode == op.MSG_MOVE_JUMP) {
-		if err = s.transition(StateInWorld); err != nil {
-			return nil, err
-		}
-		s.logoutAt = time.Time{}
-		// The stand-state packets need the GUID; the player is still on s.
-		if s.player != nil {
-			if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand); e == nil {
-				_ = s.send(upd)
-			}
-			_ = s.send(codec.StandStateMessage(codec.StandStateStand))
-			_ = s.send(codec.ForceMoveUnroot(s.player.GUID))
-		}
-		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
-	}
+	// The reference has NO movement-driven logout cancellation: the rooted
+	// client cannot move, and the countdown is only cancelled by an explicit
+	// CMSG_LOGOUT_CANCEL (HandleLogoutCancelOpcode). Late movement during
+	// StateLoggingOut is applied to the snapshot — which is saved at release —
+	// and otherwise ignored; it never produces an unsolicited CANCEL_ACK.
 	return nil, nil
 }
 func consume(size int) handlerFunc {

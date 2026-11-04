@@ -175,6 +175,12 @@ func (h *Handler) newRouter() *Router {
 // pretending to have completed the operation. Registered handlers remain strict.
 func (r *Router) unsupported(s *Session, p world.Packet) (*world.Packet, error) {
 	m, known := op.Lookup(p.Opcode)
+	if known && m.Status == op.STATUS_NEVER {
+		// The reference never processes STATUS_NEVER opcodes; receiving one
+		// (e.g. a second CMSG_AUTH_SESSION mid-session) is a protocol
+		// violation that disconnects the client there.
+		return nil, fmt.Errorf("%w: %s in state %d", codec.ErrFatalWorldPacket, m.Name, s.state)
+	}
 	inWorld := s.state == StateInWorld || s.state == StateLoggingOut
 	live := s.state <= StateLoggingOut
 	allowed := false

@@ -17,26 +17,33 @@ const (
 	HighGUIDGameObject = 0xF110
 )
 
-// makeFullGUID combines a HIGHGUID and a low GUID into a uint64.
-// TBC ObjectGuid is (high << 48) | (entry << 32) | low, but for creatures
-// the entry is 0 (only the low spawn GUID is used); for gameobjects same.
-// The client reads the high GUID from the high 16 bits.
-func makeFullGUID(high uint32, low uint32) uint64 {
-	return uint64(high)<<32 | uint64(low)
+// makeFullGUID combines HIGHGUID, entry and counter into a uint64 using
+// the reference ObjectGuid bit layout (ObjectGuid.h):
+//
+//	ObjectGuid(hi, entry, counter) = counter | (entry << 24) | (hi << 48)
+//
+// Creature and GameObject GUIDs carry the template entry in bits 24..47.
+// The HIGHGUID lives in bits 48..63, so creatures are
+// 0xF130xxxxxxxxxxxx and gameobjects 0xF110xxxxxxxxxxxx — the client reads
+// the object type from the top 16 bits.
+func makeFullGUID(high, entry, counter uint32) uint64 {
+	return uint64(counter)&0xFFFFFFFF | uint64(entry&0xFFFFFF)<<24 | uint64(high)<<48
 }
 
 // CreateObjectForCreature builds an SMSG_UPDATE_OBJECT packet with a
 // UPDATETYPE_CREATE_OBJECT2 block for a creature visible to a player.
 //
 // Reference: Object::BuildCreateUpdateBlockForPlayer for TYPEID_UNIT (3).
-// updateFlags = LIVING(0x20) | HAS_POSITION(0x40) | HIGHGUID(0x10) = 0x70.
-// The HIGHGUID field for TYPEID_UNIT is 0x0000000B.
+// updateFlags = LIVING(0x20) | HAS_POSITION(0x40) | HIGHGUID(0x10) = 0x70
+// (Unit::Unit). The UPDATEFLAG_HIGHGUID section for TYPEID_UNIT is the
+// default uint32(0) dword — 0x0000000B belongs to the LOWGUID section,
+// which is NOT part of flag set 0x70.
 //
 // MovementInfo for a creature: flags(0) extra(0) time x y z o fallTime(0)
-// + 8 speeds + HIGHGUID word (0x0B for unit).
+// + 8 speeds + HIGHGUID dword (0 for units).
 func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.CreatureTemplate, clock uint32) world.Packet {
 	fields := make([]uint32, f.UNIT_END)
-	guid := makeFullGUID(HighGUIDUnit, spawn.GUID)
+	guid := makeFullGUID(HighGUIDUnit, spawn.Entry, spawn.GUID)
 	fields[f.OBJECT_FIELD_GUID] = uint32(guid)
 	fields[f.OBJECT_FIELD_GUID+1] = uint32(guid >> 32)
 	fields[f.OBJECT_FIELD_TYPE] = 0x0009 // TYPE_MASK_UNIT = OBJECT | UNIT
@@ -62,11 +69,10 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 	fields[f.UNIT_FIELD_NATIVEDISPLAYID] = tmpl.ModelID
 	fields[f.UNIT_FIELD_BASEATTACKTIME] = 2000
 	fields[f.UNIT_FIELD_BASEATTACKTIME+1] = 2000
-	// NPC_FLAGS (at UNIT_NPC_FLAGS)
-	// UNIT_NPC_FLAGS = 0x94+... actually at offset 95 (UNIT_FIELD_FLAGS_2? no)
-	// From UpdateFields.h: UNIT_NPC_FLAGS = 95, but our fields_gen uses
-	// UNIT_FIELD_FLAGS at 43. For simplicity we set NPC flags at the
-	// correct field. Let me check the field index.
+	// NPC flags (UNIT_NPC_FLAGS = 168) come straight from the template so the
+	// client shows gossip/vendor/quest markers (the reference sets them when
+	// loading the creature before the first values update).
+	fields[f.UNIT_NPC_FLAGS] = tmpl.NPCFlags
 
 	w := wire.NewWriter(MaxServerPayload)
 	w.Uint32(1) // block count: one object
@@ -88,7 +94,7 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 	for _, speed := range []float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, math.Pi} {
 		w.Float32(speed)
 	}
-	w.Uint32(0x0000000B) // HIGHGUID field for TYPEID_UNIT
+	w.Uint32(0) // UPDATEFLAG_HIGHGUID section: TYPEID_UNIT uses the default 0 dword
 	writeValues(w, fields)
 	b, _ := w.Result()
 	return world.Packet{Opcode: op.SMSG_UPDATE_OBJECT, Payload: b}
@@ -98,19 +104,23 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 // UPDATETYPE_CREATE_OBJECT2 block for a gameobject visible to a player.
 //
 // Reference: Object::BuildCreateUpdateBlockForPlayer for TYPEID_GAMEOBJECT (5).
-// updateFlags = HAS_POSITION(0x40) | HIGHGUID(0x10) = 0x50.
-// GOs are not LIVING (no MovementInfo/speeds); only position + rotation.
+// GameObject::GameObject sets m_updateFlag = LOWGUID | HIGHGUID |
+// HAS_POSITION = 0x08|0x10|0x40 = 0x58. GOs are not LIVING (no
+// MovementInfo/speeds): the create block is flags, position, low GUID,
+// high GUID.
 //
 // Layout:
 //
-//	uint8  updateFlags (0x50)
-//	float  x, y, z, facing  (only when HAS_POSITION and not LIVING)
-//	uint32 highGUID         (0xF110 for gameobject)
-//	uint32 gameObjectState   (GAMEOBJECT_STATE)
+//	uint8  updateFlags (0x58)
+//	float  x, y, z, facing  (HAS_POSITION, not LIVING)
+//	uint32 lowGUID          (UPDATEFLAG_LOWGUID: GetGUIDLow())
+//	uint32 highGUID         (UPDATEFLAG_HIGHGUID: 0xF110)
 //	uint8  maskBlockCount, mask, values
+//
+// GAMEOBJECT_STATE is a values field, NOT a create-block dword.
 func CreateObjectForGameObject(spawn gamedata.GameObjectSpawn, tmpl gamedata.GameObjectTemplate) world.Packet {
 	fields := make([]uint32, f.GAMEOBJECT_END)
-	guid := makeFullGUID(HighGUIDGameObject, spawn.GUID)
+	guid := makeFullGUID(HighGUIDGameObject, spawn.Entry, spawn.GUID)
 	fields[f.OBJECT_FIELD_GUID] = uint32(guid)
 	fields[f.OBJECT_FIELD_GUID+1] = uint32(guid >> 32)
 	fields[f.OBJECT_FIELD_TYPE] = 0x0021 // TYPE_MASK_GAMEOBJECT = OBJECT | GAMEOBJECT
@@ -144,16 +154,16 @@ func CreateObjectForGameObject(spawn gamedata.GameObjectSpawn, tmpl gamedata.Gam
 	w.Uint8(3)  // UPDATETYPE_CREATE_OBJECT2
 	w.PackedGUID(guid)
 	w.Uint8(5)    // TYPEID_GAMEOBJECT
-	w.Uint8(0x50) // updateFlags: HAS_POSITION | HIGHGUID (no LIVING)
+	w.Uint8(0x58) // updateFlags: LOWGUID | HIGHGUID | HAS_POSITION
 	// Position for non-living objects: 4 floats
 	w.Float32(spawn.X)
 	w.Float32(spawn.Y)
 	w.Float32(spawn.Z)
 	w.Float32(spawn.Orientation)
-	// HIGHGUID field for TYPEID_GAMEOBJECT
+	// UPDATEFLAG_LOWGUID section: GetGUIDLow() for TYPEID_GAMEOBJECT
+	w.Uint32(spawn.GUID)
+	// UPDATEFLAG_HIGHGUID section: GetGUIDHigh() for TYPEID_GAMEOBJECT
 	w.Uint32(HighGUIDGameObject)
-	// GAMEOBJECT_STATE (go_state) — written as uint32 after HIGHGUID
-	w.Uint32(spawn.State)
 	writeValues(w, fields)
 	b, _ := w.Result()
 	return world.Packet{Opcode: op.SMSG_UPDATE_OBJECT, Payload: b}

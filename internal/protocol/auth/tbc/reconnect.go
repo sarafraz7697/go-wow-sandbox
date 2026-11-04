@@ -14,7 +14,7 @@ import (
 	"wowserver/internal/protocol/auth/tbc/codec"
 )
 
-func (h Handler) reconnect(ctx context.Context, conn net.Conn, a account.Account, build uint16, ip string, trace func(string, ...any)) error {
+func (h Handler) reconnect(ctx context.Context, conn net.Conn, a account.Account, loginName string, build uint16, ip string, trace func(string, ...any)) error {
 	if h.Sessions == nil {
 		return errors.New("session store not configured")
 	}
@@ -46,7 +46,9 @@ func (h Handler) reconnect(ctx context.Context, conn net.Conn, a account.Account
 		return err
 	}
 	digest := sha1.New()
-	digest.Write([]byte(a.Name))
+	// The reconnect proof hashes the client-sent login name, like the
+	// reference _login in _HandleReconnectProof.
+	digest.Write([]byte(loginName))
 	digest.Write(decoded.Nonce[:])
 	digest.Write(nonce[:])
 	digest.Write(key[:])

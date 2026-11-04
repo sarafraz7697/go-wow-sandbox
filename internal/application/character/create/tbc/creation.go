@@ -20,16 +20,28 @@ import (
 type section struct{ race, gender, kind, variation, color, flags uint32 }
 type hair struct{ race, gender, variation uint32 }
 type ability struct{ skill, spell, race, class, method uint32 }
+
+// faction keeps the four mask quadruples of FactionEntry (DBCStructure.h):
+// quadrant i applies when raceMask[i]/classMask[i] fit the player.
+// ReputationMgr::GetDefaultStateFlags evaluates the player's own race/class
+// masks (via GetIndexFitTo) when picking ReputationFlags[idx], so the raw
+// masks must be stored and evaluated per character at Build time instead of
+// once at load time for a fixed Human/Warrior pair.
+type faction struct {
+	id                                   uint32
+	raceMask, classMask, flags [4]uint32
+}
+
 type Profile struct {
-	data        *gamedata.Catalog
-	sections    []section
-	hair        []hair
-	abilities   []ability
-	categories  map[uint32]uint32
-	reputations []character.InitialReputation
-	// taxiCapital is the playercreateinfo-independent capital taxi node MaNGOS
-	// unlocks for each race in PlayerTaxi::InitTaxiNodesForLevel, indexed by race.
-	taxiCapital map[uint32]uint32
+	data       *gamedata.Catalog
+	sections   []section
+	hair       []hair
+	abilities  []ability
+	categories map[uint32]uint32
+	factions   []faction
+	// taxiCapital lists the race-specific initial taxi nodes MaNGOS unlocks in
+	// PlayerTaxi::InitTaxiNodesForLevel. Night Elves start with BOTH nodes.
+	taxiCapital map[uint32][]uint32
 	// taxiOutland is the cross-faction Outland hub: 100 (Alliance) / 99 (Horde).
 	taxiOutland map[uint32]uint32
 }
@@ -39,7 +51,7 @@ func Load(ctx context.Context, dir string, data *gamedata.Catalog) (*Profile, er
 	p := &Profile{
 		data:        data,
 		categories:  map[uint32]uint32{},
-		taxiCapital: map[uint32]uint32{},
+		taxiCapital: map[uint32][]uint32{},
 		taxiOutland: map[uint32]uint32{},
 	}
 	read := func(name string, fields uint32, consume func([]uint32)) error {
@@ -81,25 +93,25 @@ func Load(ctx context.Context, dir string, data *gamedata.Catalog) (*Profile, er
 		if int32(v[1]) < 0 {
 			return
 		}
-		flags := uint32(0)
+		var f faction
+		f.id = v[0]
 		for i := 0; i < 4; i++ {
-			if (v[2+i] == 0 || v[2+i]&1 != 0) && (v[6+i] == 0 || v[6+i]&1 != 0) {
-				flags = v[14+i]
-				break
-			}
+			f.raceMask[i] = v[2+i]
+			f.classMask[i] = v[6+i]
+			f.flags[i] = v[14+i]
 		}
-		p.reputations = append(p.reputations, character.InitialReputation{Faction: v[0], Flags: flags})
+		p.factions = append(p.factions, f)
 	}); err != nil {
 		return nil, err
 	}
-	// Capital taxi node for each race. Source: PlayerTaxi::InitTaxiNodesForLevel.
+	// Initial taxi nodes for each race. Source: PlayerTaxi::InitTaxiNodesForLevel.
 	// RACE_* are stable enum values; we keep the literals so a future DBC change
 	// cannot silently move what the MaNGOS reference calls the "race-specific
-	// initial known node". Outland hub is keyed by team (7 Alliance, 1 Horde).
-	for race, node := range map[uint32]uint32{
-		1: 2, 2: 23, 3: 6, 4: 26, 5: 11, 6: 22, 7: 6, 8: 23, 10: 82, 11: 94,
+	// initial known nodes". Night Elves unlock Dolanaar (26) AND Darnassus (27).
+	for race, nodes := range map[uint32][]uint32{
+		1: {2}, 2: {23}, 3: {6}, 4: {26, 27}, 5: {11}, 6: {22}, 7: {6}, 8: {23}, 10: {82}, 11: {94},
 	} {
-		p.taxiCapital[race] = node
+		p.taxiCapital[race] = nodes
 	}
 	// LearnDefaultSpells covers every spell listed in playercreateinfo_spell,
 	// including language skills. A modified starting-spell set that ships a
@@ -187,8 +199,9 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 	}
 	out.Request = r
 	// Initial taxi mask mirrors PlayerTaxi::InitTaxiNodesForLevel exactly:
-	// the race-specific capital, plus the Outland hub keyed by team.
-	if node, ok := p.taxiCapital[uint32(r.Race)]; ok {
+	// the race-specific capital nodes (Night Elves get 26 and 27), plus the
+	// Outland hub keyed by team.
+	for _, node := range p.taxiCapital[uint32(r.Race)] {
 		out.TaxiMask[node/32] |= 1 << (node % 32)
 	}
 	switch p.team(uint32(r.Race)) {
@@ -215,9 +228,40 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 		bonus = 20 + (stamina-20)*10
 	}
 	out.Health = base.Health + bonus
+	// Powers at creation: the reference stores max resources and restores
+	// current powers to max on every login (Player::LoadFromDB). Persist the
+	// same full value the stat pipeline reports as maximum so a new caster
+	// does not enter the world with an empty mana bar; rage/focus stay 0.
+	intellect := level.Stats[3]
+	manaBonus := min(intellect, 20)
+	if intellect > 20 {
+		manaBonus += (intellect - 20) * 15
+	}
+	if base.Mana > 0 {
+		out.Mana = base.Mana + manaBonus
+	}
+	if r.Class == 4 { // CLASS_ROGUE: energy users start with a full bar.
+		out.Energy = 100
+	}
+	out.Team = p.team(uint32(r.Race))
 	out.Spells = p.data.StartSpells(uint32(r.Race), uint32(r.Class))
 	out.Actions = p.data.Actions(uint32(r.Race), uint32(r.Class))
-	out.Reputations = append([]character.InitialReputation(nil), p.reputations...)
+	// Reputation flags follow ReputationMgr::Initialize: every faction with a
+	// reputation list index is stored with GetDefaultStateFlags evaluated for
+	// THIS character's race/class masks (previously a fixed Human/Warrior fit
+	// was baked in at load time for every race/class).
+	raceMask := uint32(1) << (uint32(r.Race) - 1)
+	classMask := uint32(1) << (uint32(r.Class) - 1)
+	for _, f := range p.factions {
+		flags := uint32(0)
+		for i := 0; i < 4; i++ {
+			if (f.raceMask[i] == 0 || f.raceMask[i]&raceMask != 0) && (f.classMask[i] == 0 || f.classMask[i]&classMask != 0) {
+				flags = f.flags[i]
+				break
+			}
+		}
+		out.Reputations = append(out.Reputations, character.InitialReputation{Faction: f.id, Flags: flags})
+	}
 	known := map[uint32]bool{}
 	for _, s := range out.Spells {
 		known[s] = true

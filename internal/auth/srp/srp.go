@@ -13,7 +13,15 @@ import (
 
 var modulus, _ = new(big.Int).SetString("894B645E89E1535BBDAD5B8B290650530801B18EBFBF5E8FAB3C82872A3E9BB7", 16)
 var generator = big.NewInt(7)
-var ErrProof = errors.New("invalid SRP proof")
+
+// Verification failures are distinguishable so the caller can mirror the
+// reference AuthSocket behaviour: a bad public value closes the connection
+// silently, only a genuine M1 mismatch is a wrong-password reply.
+var (
+	ErrProof         = errors.New("invalid SRP proof")
+	ErrInvalidPublic = errors.New("invalid SRP public value")
+	ErrReplay        = errors.New("SRP exchange already used")
+)
 
 func little(b []byte) *big.Int {
 	r := append([]byte(nil), b...)
@@ -88,16 +96,16 @@ func newServer(name string, salt, verifier [32]byte, random io.Reader) (*Server,
 // Verify is one-shot. No key is returned on a failed proof.
 func (s *Server) Verify(public [32]byte, proof [20]byte) (key [40]byte, serverProof [20]byte, err error) {
 	if s.used {
-		return key, serverProof, ErrProof
+		return key, serverProof, ErrReplay
 	}
 	s.used = true
 	A := little(public[:])
 	if new(big.Int).Mod(A, modulus).Sign() == 0 {
-		return key, serverProof, ErrProof
+		return key, serverProof, ErrInvalidPublic
 	}
 	u := little(hash(public[:], s.Public[:]))
 	if u.Sign() == 0 {
-		return key, serverProof, ErrProof
+		return key, serverProof, ErrInvalidPublic
 	}
 	S := new(big.Int).Exp(s.verifier, u, modulus)
 	S.Mul(S, A)

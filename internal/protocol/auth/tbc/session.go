@@ -5,6 +5,8 @@ package tbc
 import (
 	"context"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -45,6 +47,14 @@ func (h Handler) Serve(ctx context.Context, conn net.Conn) (result error) {
 	}
 	trace("login challenge decoded", "build", c.Build, "version", c.Version)
 	fail := func(code byte) error {
+		if c.Command == 2 {
+			// The reference never answers a rejected reconnect challenge on
+			// the wire: _HandleReconnectChallenge either sends the 34-byte
+			// challenge or closes the connection. The previous {0x02, code}
+			// reply was a malformed frame for a 2.4.3 client.
+			trace("reconnect challenge rejected", "result_code", code)
+			return fmt.Errorf("reconnect challenge rejected: code %d", code)
+		}
 		trace("authentication rejected", "result_code", code)
 		return writeRejection(ctx, conn, codec.ChallengeFailure(c.Command, code), trace)
 	}
@@ -56,21 +66,23 @@ func (h Handler) Serve(ctx context.Context, conn net.Conn) (result error) {
 		return err
 	}
 	stage = "account_lookup"
-	a, code := h.lookupAccount(ctx, c.Account, ip, trace)
+	a, loginName, code := h.lookupAccount(ctx, c.Account, ip, trace)
 	if code != 0 {
 		return fail(code)
 	}
 	trace("account found", "account_id", a.ID)
 	if c.Command == 2 {
 		stage = "reconnect"
-		return h.reconnect(ctx, conn, a, c.Build, ip, trace)
+		return h.reconnect(ctx, conn, a, loginName, c.Build, ip, trace)
 	}
-	return h.login(ctx, conn, a, c.Build, ip, &stage, trace)
+	return h.login(ctx, conn, a, loginName, c.Build, ip, &stage, trace)
 }
 
-func (h Handler) login(ctx context.Context, conn net.Conn, a account.Account, build uint16, ip string, stage *string, trace func(string, ...any)) error {
+func (h Handler) login(ctx context.Context, conn net.Conn, a account.Account, loginName string, build uint16, ip string, stage *string, trace func(string, ...any)) error {
 	*stage = "srp_challenge"
-	exchange, err := srp.New(a.Name, a.Salt, a.Verifier)
+	// The SRP identity is the client-sent login name (see lookupAccount):
+	// the client hashes the name it typed, uppercased.
+	exchange, err := srp.New(loginName, a.Salt, a.Verifier)
 	if err != nil {
 		return writeRejection(ctx, conn, codec.ChallengeFailure(0, 8), trace)
 	}
@@ -91,7 +103,14 @@ func (h Handler) login(ctx context.Context, conn net.Conn, a account.Account, bu
 	}
 	key, m2, err := exchange.Verify(decoded.Public, decoded.Digest)
 	if err != nil {
-		trace("client proof rejected", "reason", "invalid public value or proof")
+		if errors.Is(err, srp.ErrInvalidPublic) || errors.Is(err, srp.ErrReplay) {
+			// Reference AuthSocket.cpp: a zero A % N (or a replayed proof)
+			// closes the connection silently — no wrong-password packet is
+			// sent and failed_logins is not touched.
+			trace("client proof rejected", "reason", "invalid public value")
+			return err
+		}
+		trace("client proof rejected", "reason", "wrong password")
 		if err = h.Store.Failed(ctx, a.ID); err != nil {
 			return writeRejection(ctx, conn, codec.ProofFailure(8), trace)
 		}

@@ -52,7 +52,7 @@ func TestCharacterScreenReplies(t *testing.T) {
 		{world.Packet{Opcode: op.CMSG_CHAR_ENUM}, world.Packet{Opcode: op.SMSG_CHAR_ENUM, Payload: []byte{0}}},
 		{world.Packet{Opcode: op.CMSG_PING, Payload: []byte{1, 2, 3, 4, 0, 0, 0, 0}}, world.Packet{Opcode: op.SMSG_PONG, Payload: []byte{1, 2, 3, 4}}},
 		{world.Packet{Opcode: op.CMSG_CHAR_DELETE, Payload: make([]byte, 8)}, world.Packet{Opcode: op.SMSG_CHAR_DELETE, Payload: []byte{0x3c}}},
-		{world.Packet{Opcode: op.CMSG_PLAYER_LOGIN, Payload: make([]byte, 8)}, world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x46}}},
+		{world.Packet{Opcode: op.CMSG_PLAYER_LOGIN, Payload: make([]byte, 8)}, world.Packet{Opcode: op.SMSG_CHARACTER_LOGIN_FAILED, Payload: []byte{0x45}}},
 	} {
 		p, e := CharacterScreenPacket(tc.request)
 		if e != nil || p.Opcode != tc.response.Opcode || !bytes.Equal(p.Payload, tc.response.Payload) {

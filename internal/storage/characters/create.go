@@ -166,10 +166,21 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	}
 	facts := character.CreationFacts{RealmCount: count, OtherRealmsCount: other, NameTaken: exists, RealmIcon: icon}
 	{
-		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE account=? AND race IN (2,5,6,8,10) AND (deleteDate IS NULL OR deleteDate=0))", a.ID).Scan(&exists); err != nil {
-			return 0, err
+		// The reference rejects a PvP-realm creation when the account already
+		// has a character of the OPPOSING team (CharacterHandler.cpp compares
+		// TeamForRace of the new race against the existing characters), not
+		// "any Horde character exists". Compare teams instead of hardcoding
+		// one side.
+		opposing := "1,3,7,11" // Alliance races
+		if p.Team == 1 {
+			opposing = "2,5,6,8,10" // Horde races
 		}
-		facts.HasOpposingFaction = exists
+		if p.Team == 1 || p.Team == 7 {
+			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE account=? AND race IN ("+opposing+") AND (deleteDate IS NULL OR deleteDate=0))", a.ID).Scan(&exists); err != nil {
+				return 0, err
+			}
+			facts.HasOpposingFaction = exists
+		}
 	}
 	if err = s.policy.Check(facts); err != nil {
 		return 0, err
@@ -219,8 +230,11 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 		}
 	}
 	now := time.Now().Unix()
-	exec(`INSERT INTO characters (guid,account,name,race,class,gender,level,playerBytes,playerBytes2,position_x,position_y,position_z,map,orientation,zone,at_login,health,watchedFaction,taximask,exploredZones,equipmentCache,knownTitles,createdDate,logout_time)
- VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,32,?,4294967295,?,?,?,?,?,?)`, guid, a.ID, r.Name, r.Race, r.Class, r.Gender, bytes1, bytes2, p.Start.X, p.Start.Y, p.Start.Z, p.Start.Map, p.Start.Orientation, p.Start.Zone, p.Health, uints(p.TaxiMask[:]), strings.Repeat("0 ", 128), uints(cache), "0 0 ", now, now)
+	// power1/power4 are persisted like the reference SaveToDB at creation
+	// (Player::Create -> InitStatsForLevel fills mana/energy before the first
+	// save). power2 (rage) and power3 (focus) stay 0 via explicit defaults.
+	exec(`INSERT INTO characters (guid,account,name,race,class,gender,level,playerBytes,playerBytes2,position_x,position_y,position_z,map,orientation,zone,at_login,health,power1,power2,power3,power4,watchedFaction,taximask,exploredZones,equipmentCache,knownTitles,createdDate,logout_time)
+ VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,32,?,?,0,0,?,4294967295,?,?,?,?,?,?)`, guid, a.ID, r.Name, r.Race, r.Class, r.Gender, bytes1, bytes2, p.Start.X, p.Start.Y, p.Start.Z, p.Start.Map, p.Start.Orientation, p.Start.Zone, p.Health, p.Mana, p.Energy, uints(p.TaxiMask[:]), strings.Repeat("0 ", 128), uints(cache), "0 0 ", now, now)
 	exec("INSERT INTO character_homebind (guid,map,zone,position_x,position_y,position_z) VALUES (?,?,?,?,?,?)", guid, p.Start.Map, p.Start.Zone, p.Start.X, p.Start.Y, p.Start.Z)
 	mark("write_spells")
 	rows := make([][]any, 0, len(p.Spells))

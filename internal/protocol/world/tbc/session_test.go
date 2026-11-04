@@ -189,10 +189,11 @@ func TestWorldAuthenticationAndCharacterScreen(t *testing.T) {
 	}
 	cancel()
 	waitWorld(t, done)
-	if !h.claim(s.a.ID) {
+	if c, err := h.claim(s.a.ID, nil); err != nil {
 		t.Fatal("admission leaked")
+	} else {
+		h.release(s.a.ID, c)
 	}
-	h.release(s.a.ID)
 }
 func TestWorldRejectsInvalidLogin(t *testing.T) {
 	for _, tc := range []struct {
@@ -216,19 +217,27 @@ func TestWorldDuplicateAndRevocation(t *testing.T) {
 	c := worldClient{conn: conn}
 	c.authenticate(t, s.a.Key, 8606, false)
 	c.readPacket(t)
+	// Reference behaviour (World::AddSession): a duplicate connection KICKS
+	// the previous session and is admitted itself. The first connection
+	// unwinds; the second one stays authenticated.
 	second, secondDone, _ := worldPipe(t, h)
 	d := worldClient{conn: second}
 	p := d.authenticate(t, s.a.Key, 8606, false)
-	if !bytes.Equal(p.Payload, []byte{authAlreadyOnline}) {
-		t.Fatal("duplicate accepted")
+	if p.Opcode != op.SMSG_AUTH_RESPONSE || p.Payload[0] != 0x0c {
+		t.Fatal("duplicate connection was not admitted")
 	}
-	waitWorld(t, secondDone)
+	// net.Pipe is synchronous: consume ADDON_INFO so the server's write
+	// does not block on its request deadline.
+	if q := d.readPacket(t); q.Opcode != op.SMSG_ADDON_INFO {
+		t.Fatal("addon info")
+	}
+	waitWorld(t, done)
 	s.mu.Lock()
 	s.revoked = true
 	s.mu.Unlock()
-	c.sendPacket(t, world.Packet{Opcode: op.CMSG_CHAR_ENUM})
+	d.sendPacket(t, world.Packet{Opcode: op.CMSG_CHAR_ENUM})
 	select {
-	case err := <-done:
+	case err := <-secondDone:
 		if !errors.Is(err, account.ErrChanged) {
 			t.Fatal(err)
 		}

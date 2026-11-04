@@ -6,7 +6,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"wowserver/internal/domain/character"
 	domainworld "wowserver/internal/domain/world"
+	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
@@ -49,17 +51,57 @@ func (h *Handler) handleMessageChat(_ context.Context, s *Session, p world.Packe
 		codec.ChatMsgBattleground, codec.ChatMsgBattlegroundLead:
 		return h.echoSelf(s, req, log)
 	case codec.ChatMsgAFK, codec.ChatMsgDND:
-		return h.echoSelf(s, req, log)
+		return h.handleAFKDND(s, req, log)
 	default:
 		return nil, codec.ErrWorldPacket
 	}
+}
+
+// chatTag returns the CHAT_TAG_* byte derived from the player's current
+// AFK/DND flags (reference: Player::GetChatTag). It is attached to every
+// chat packet sent on behalf of this player.
+func (h *Handler) chatTag(p *character.Player) uint8 {
+	if p.PlayerFlags&codec.PlayerFlagsAFK != 0 {
+		return codec.ChatTagAFK
+	}
+	if p.PlayerFlags&codec.PlayerFlagsDND != 0 {
+		return codec.ChatTagDND
+	}
+	return codec.ChatTagNone
+}
+
+// handleAFKDND mirrors the CHAT_MSG_AFK / CHAT_MSG_DND cases of the
+// reference HandleMessagechatOpcode: toggling PLAYER_FLAGS_AFK or
+// PLAYER_FLAGS_DND (clearing the other one when a new mode is set) with a
+// partial SMSG_UPDATE_OBJECT. No SMSG_MESSAGECHAT echo is sent — the client
+// shows the state from the player flag. A non-empty message on an
+// already-set flag only updates the auto-reply text, which is not
+// persisted by this server yet.
+func (h *Handler) handleAFKDND(s *Session, req codec.ChatRequest, log *slog.Logger) (*world.Packet, error) {
+	flag, other := codec.PlayerFlagsAFK, codec.PlayerFlagsDND
+	if req.Type == codec.ChatMsgDND {
+		flag, other = codec.PlayerFlagsDND, codec.PlayerFlagsAFK
+	}
+	if s.player.PlayerFlags&flag == 0 {
+		// New mode: clear the other flag, then set this one.
+		s.player.PlayerFlags &^= other
+		s.player.PlayerFlags |= flag
+	} else if req.Message == "" {
+		// Already set and no new auto-reply text: toggle off.
+		s.player.PlayerFlags &^= flag
+	}
+	if upd, e := codec.PlayerFlagsUpdate(s.player.GUID, s.player.PlayerFlags); e == nil {
+		_ = s.send(upd)
+	}
+	log.Debug("afk/dnd toggled", "type", req.Type, "player_flags", s.player.PlayerFlags)
+	return nil, nil
 }
 
 // handleSayYellEmote broadcasts the message to nearby players (including
 // the sender). SAY ≈ 25 yards; YELL ≈ 50 yards; EMOTE uses default
 // visibility (90 yards). Mirrors MaNGOS Player::Say/Yell/TextEmote.
 func (h *Handler) handleSayYellEmote(s *Session, req codec.ChatRequest, log *slog.Logger) (*world.Packet, error) {
-	pkt, err := codec.BuildChatPacket(req.Type, req.Language, uint64(s.player.GUID), s.player.Name, 0, req.Message)
+	pkt, err := codec.BuildChatPacket(req.Type, req.Language, uint64(s.player.GUID), s.player.Name, 0, req.Message, h.chatTag(s.player))
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +147,16 @@ func (h *Handler) handleWhisper(s *Session, req codec.ChatRequest, log *slog.Log
 		if aw, ok := h.Broadcast.(allWorld); ok {
 			for _, p := range aw.All() {
 				if strings.EqualFold(p.Name, target) {
-					// Deliver whisper to target.
-					whisper, err := codec.BuildChatPacket(codec.ChatMsgWhisper, req.Language, uint64(s.player.GUID), s.player.Name, uint64(p.GUID), req.Message)
+					// Deliver whisper to target. Reference Player::Whisper:
+					// the language is forced to LANG_UNIVERSAL (whispers are
+					// always readable) unless it is addon data, and the packet
+					// carries NO target GUID — only the sender's GUID (and the
+					// sender's chat tag).
+					lang := req.Language
+					if lang != codec.LangAddon {
+						lang = codec.LangUniversal
+					}
+					whisper, err := codec.BuildChatPacket(codec.ChatMsgWhisper, lang, uint64(s.player.GUID), s.player.Name, 0, req.Message, h.chatTag(s.player))
 					if err != nil {
 						return nil, err
 					}
@@ -133,14 +183,7 @@ func (h *Handler) handleChannelSay(s *Session, req codec.ChatRequest, log *slog.
 	if name == "" {
 		return nil, nil
 	}
-	type channelWorld interface {
-		GetChannel(string) interface {
-			IsMember(uint32) bool
-			IsMuted(uint32) bool
-			Members() ([]uint32, []domainworld.Sender)
-		}
-	}
-	w, ok := h.Broadcast.(channelWorld)
+	w, ok := h.Broadcast.(domainworld.ChannelRegistry)
 	if !ok {
 		return h.echoSelf(s, req, log)
 	}
@@ -162,7 +205,7 @@ func (h *Handler) handleChannelSay(s *Session, req codec.ChatRequest, log *slog.
 		return nil, nil
 	}
 	// Build the channel chat packet and send to all members (including self).
-	pkt, err := codec.BuildChannelChatPacket(codec.ChatMsgChannel, req.Language, uint64(s.player.GUID), s.player.Name, name, req.Message)
+	pkt, err := codec.BuildChannelChatPacket(codec.ChatMsgChannel, req.Language, uint64(s.player.GUID), s.player.Name, name, req.Message, h.chatTag(s.player))
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +224,7 @@ func (h *Handler) playerNotFound(s *Session, name string) (*world.Packet, error)
 }
 
 func (h *Handler) echoSelf(s *Session, req codec.ChatRequest, log *slog.Logger) (*world.Packet, error) {
-	pkt, err := codec.BuildChatPacket(req.Type, req.Language, uint64(s.player.GUID), s.player.Name, 0, req.Message)
+	pkt, err := codec.BuildChatPacket(req.Type, req.Language, uint64(s.player.GUID), s.player.Name, 0, req.Message, h.chatTag(s.player))
 	if err != nil {
 		return nil, err
 	}
@@ -212,9 +255,29 @@ func (h *Handler) handleTextEmote(_ context.Context, s *Session, p world.Packet)
 	return nil, nil
 }
 
-func (h *Handler) handleChatIgnored(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
+// handleChatIgnored mirrors HandleChatIgnoredOpcode: the client sends the
+// GUID of the player whose whisper it auto-rejected; the ignored player is
+// told so with a CHAT_MSG_IGNORED message whose body is the ignoring
+// player's name (LANG_UNIVERSAL, no target GUID).
+func (h *Handler) handleChatIgnored(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 	if len(p.Payload) != 9 {
 		return nil, codec.ErrWorldPacket
+	}
+	if s.player == nil || h.Broadcast == nil {
+		return nil, nil
+	}
+	r := wire.NewReader(p.Payload)
+	iguid := r.Uint64()
+	r.Uint8() // probably related to spam reporting
+	if e := r.Finish(); e != nil {
+		return nil, e
+	}
+	msg, err := codec.BuildChatPacket(codec.ChatMsgIgnored, codec.LangUniversal, uint64(s.player.GUID), "", 0, s.player.Name, codec.ChatTagNone)
+	if err != nil {
+		return nil, err
+	}
+	if e := h.Broadcast.SendTo(uint32(iguid), domainworld.Packet{Opcode: msg.Opcode, Payload: msg.Payload}); e != nil {
+		s.log.Debug("ignored notice not delivered", "target", iguid, "error", e)
 	}
 	return nil, nil
 }

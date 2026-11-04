@@ -57,6 +57,7 @@ const (
 // For YouLeft (0x03), the payload is:
 //
 //	uint32 channelId
+//	uint8  0 (the reference writes 0; the comment says 0x00 or 0x01)
 func ChannelNotify(notifyType uint8, channelName string) world.Packet {
 	w := wire.NewWriter(64)
 	w.Uint8(notifyType)
@@ -78,12 +79,16 @@ func BuildChannelNotifyYouJoined(channelName string, flags uint8, channelId uint
 	return world.Packet{Opcode: op.SMSG_CHANNEL_NOTIFY, Payload: b}
 }
 
-// ChannelNotifyYouLeft builds the YOU_LEFT notify with the channelId field.
+// ChannelNotifyYouLeft builds the YOU_LEFT notify. Reference
+// Channel::MakeYouLeft appends the channelId and a trailing uint8 after
+// the channel name; without that byte the packet is one byte short and the
+// client may drop the whole notify.
 func BuildChannelNotifyYouLeft(channelName string, channelId uint32) world.Packet {
 	w := wire.NewWriter(64)
 	w.Uint8(ChannelNotifyYouLeft)
 	w.CString(channelName, 128)
 	w.Uint32(channelId)
+	w.Uint8(0) // can be 0x00 and 0x01 in the reference
 	b, _ := w.Result()
 	return world.Packet{Opcode: op.SMSG_CHANNEL_NOTIFY, Payload: b}
 }
