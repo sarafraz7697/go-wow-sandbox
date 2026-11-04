@@ -21,10 +21,11 @@ func DeleteResultCode(err error) byte {
 // Delete removes a character owned by accountID. It performs a hard delete
 // across all character-owned tables in one transaction. The character must
 // not be online to avoid deleting a snapshot a live session still owns.
-// realmcharacters counter is not decremented here; it lives in the login
-// database, which this Store does not access. The count is best-effort and
-// may drift by one until the normal logout path or a future admin command
-// corrects it.
+// realmcharacters.numchars is decremented inside the same transaction that
+// deletes the character row, using the login schema prefix stashed by
+// NewCreator. When loginSchema is empty (tests that bypass NewCreator, or
+// a Store that was never configured for creation) the counter is left
+// untouched, matching the previous behavior.
 func (s *Store) Delete(ctx context.Context, accountID uint64, guid uint32) error {
 	if accountID == 0 || guid == 0 {
 		return character.ErrPlayerUnavailable
@@ -107,6 +108,17 @@ func (s *Store) Delete(ctx context.Context, accountID uint64, guid uint32) error
 	}
 	if n != 1 {
 		return fmt.Errorf("%w: character row vanished during delete", character.ErrPlayerUnavailable)
+	}
+	// Decrement the account-wide counter on the same transaction so a crash
+	// between the two writes cannot leave them inconsistent. GREATEST guards
+	// against underflow if the counter was already out of sync. A missing row
+	// (account never created on this realm) is a no-op: UPDATE affects 0 rows.
+	if s.loginSchema != "" && s.realmID != 0 {
+		if _, e := tx.ExecContext(ctx,
+			"UPDATE "+s.loginSchema+"realmcharacters SET numchars=GREATEST(numchars-1,0) WHERE realmid=? AND acctid=?",
+			s.realmID, accountID); e != nil {
+			return e
+		}
 	}
 	return tx.Commit()
 }

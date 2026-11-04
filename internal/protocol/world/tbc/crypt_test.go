@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"wowserver/internal/protocol/world/tbc/crypt"
 )
 
 type cryptVector struct {
@@ -41,21 +43,30 @@ func TestIndependentCryptVectors(t *testing.T) {
 		t.Run(v.Name, func(t *testing.T) {
 			var session [40]byte
 			copy(session[:], unhex(t, v.Session))
-			key := deriveKey(session)
+			key := crypt.DeriveKey(session)
 			if !bytes.Equal(key[:], unhex(t, v.Derived)) {
 				t.Fatal("HMAC/minimal integer mismatch")
 			}
-			send, recv := headerCipher{key: key}, headerCipher{key: key}
+			// Build the cipher through the same constructor production uses, so
+			// the test exercises the real "reject zero session" guard too.
+			send, err := crypt.NewCipher(session)
+			if err != nil {
+				t.Fatalf("send cipher: %v", err)
+			}
+			recv, err := crypt.NewCipher(session)
+			if err != nil {
+				t.Fatalf("recv cipher: %v", err)
+			}
 			// Interleave directions to prove their counters do not share state; six
 			// packets cross the 20-byte key boundary in both directions.
 			for i := range v.ClientPlain {
 				b := unhex(t, v.ClientEncrypted[i])
-				recv.decrypt(b)
+				recv.Decrypt(b)
 				if !bytes.Equal(b, unhex(t, v.ClientPlain[i])) {
 					t.Fatalf("client header %d", i)
 				}
 				b = unhex(t, v.ServerPlain[i])
-				send.encrypt(b)
+				send.Encrypt(b)
 				if !bytes.Equal(b, unhex(t, v.ServerEncrypted[i])) {
 					t.Fatalf("server header %d", i)
 				}

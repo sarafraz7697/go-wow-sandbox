@@ -1,3 +1,8 @@
+// Package characters owns the character-side persistence and the
+// account-wide realmcharacters counter. The counter lives in the login
+// database; Open's connection reaches it cross-schema because worldd
+// requires the login and character databases to share one MySQL endpoint
+// and the DB user to have cross-schema access (validated by NewCreator).
 package characters
 
 import (
@@ -10,6 +15,13 @@ import (
 type Store struct {
 	DB          *sql.DB
 	idleTimeout time.Duration // Set by worldd; used for stale-online recovery.
+	// loginSchema and realmID are populated by NewCreator before the world
+	// listener accepts traffic. Delete reads them to decrement
+	// realmcharacters.numchars in the same transaction as the hard delete.
+	// Empty/zero means "counter not maintained" (legacy callers, tests) and
+	// Delete silently skips the decrement.
+	loginSchema string
+	realmID     uint32
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -17,7 +29,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db, 2 * time.Minute}, nil
+	return &Store{DB: db, idleTimeout: 2 * time.Minute}, nil
 }
 
 // SetIdleTimeout configures the stale-online recovery threshold. worldd calls

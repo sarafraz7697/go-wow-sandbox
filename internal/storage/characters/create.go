@@ -66,6 +66,13 @@ func (s *Store) NewCreator(ctx context.Context, characterDSN, loginDSN string, r
 	}
 	rows.Close()
 	sum := sha256.Sum256([]byte(c.DBName))
+	// Stash the validated login schema prefix and realm on Store so the
+	// delete path can decrement realmcharacters.numchars in its own
+	// transaction. NewCreator runs once at startup before the listener
+	// accepts traffic; subsequent reads by Delete are safe under the same
+	// "set once before serving" contract as SetIdleTimeout.
+	s.loginSchema = login
+	s.realmID = realm
 	return &Creator{db: s.DB, login: login, realm: realm, policy: policy, lock: fmt.Sprintf("wow-create-%x", sum[:20])}, nil
 }
 
