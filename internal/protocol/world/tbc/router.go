@@ -38,6 +38,7 @@ type Session struct {
 	syncCounter                uint32
 	syncPending                map[uint32]time.Time
 	send                       func(...world.Packet) error
+	trySend                    func(world.Packet) bool // non-blocking, for broadcasts
 	onTick                     func(context.Context, *Session) error
 	state                      State
 	account                    account.WorldSession

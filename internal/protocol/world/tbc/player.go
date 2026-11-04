@@ -7,6 +7,7 @@ import (
 	"wowserver/internal/application/movement"
 	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
+	domainworld "wowserver/internal/domain/world"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
@@ -115,6 +116,11 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	}
 	restore = false
 	s.log.Info("player entered world", "guid", guid, "map", player.Map, "mode", "local movement")
+	// Register the player in the world simulation so broadcasts can reach
+	// other players on the same map. The presence snapshot includes the
+	// team (from ChrRaces.BaseLanguage via gamedata) for faction-filtered
+	// broadcasts in future slices.
+	h.registerInWorld(s, player)
 	// The player is now InWorld. An initial time-sync send failure is not
 	// fatal; the tick loop retries on the next cadence.
 	if syncErr := h.sendTimeSync(s); syncErr != nil {
@@ -135,6 +141,14 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 		return err
 	}
 	s.log.Info("player saved and released", "guid", s.player.GUID, "played_seconds", seconds)
+	// Despawn flow: broadcast DESTROY_OBJECT to nearby players so they
+	// stop rendering this player. Must happen before Unregister, while
+	// the player is still in the world registry.
+	if h.Broadcast != nil {
+		destroyPkt := codec.DestroyObject(s.player.GUID)
+		h.Broadcast.Broadcast(s.player.GUID, domainworld.Packet{Opcode: destroyPkt.Opcode, Payload: destroyPkt.Payload}, false)
+		h.Broadcast.Unregister(s.player.GUID)
+	}
 	if s.player.Entered {
 		s.recentlyLoggedOut = true
 	}
@@ -142,6 +156,99 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 	s.logoutAt = time.Time{}
 	s.syncPending = nil
 	return nil
+}
+
+// sessionSender adapts the session's send/trySend closures to the
+// domain/world.Sender interface. The world simulation holds one of these
+// per in-world player and calls TrySend from broadcast primitives.
+type sessionSender struct {
+	send    func(...world.Packet) error
+	trySend func(world.Packet) bool
+}
+
+func (s *sessionSender) Send(packets ...domainworld.Packet) error {
+	if len(packets) == 0 {
+		return nil
+	}
+	protos := make([]world.Packet, len(packets))
+	for i, p := range packets {
+		protos[i] = world.Packet{Opcode: p.Opcode, Payload: p.Payload}
+	}
+	return s.send(protos...)
+}
+
+func (s *sessionSender) TrySend(p domainworld.Packet) bool {
+	return s.trySend(world.Packet{Opcode: p.Opcode, Payload: p.Payload})
+}
+
+// registerInWorld adds the player to the world simulation's broadcast
+// registry. The presence snapshot is built from the loaded Player and the
+// gamedata Catalog (for the team field). If the Broadcaster is nil or the
+// registration fails, the player still enters the world; broadcasts just
+// won't reach or from this session.
+func (h *Handler) registerInWorld(s *Session, p *character.Player) {
+	if h.Broadcast == nil {
+		return
+	}
+	race, _ := h.Data.Race(uint32(p.Race))
+	class, _ := h.Data.Class(uint32(p.Class))
+	display := race.MaleDisplay
+	if p.Gender == 1 {
+		display = race.FemaleDisplay
+	}
+	// Build the full presence snapshot needed for CREATE_OBJECT.
+	var visibleItems [19]uint32
+	for _, item := range p.Items {
+		if item.Bag == 0 && item.Slot < 19 {
+			visibleItems[item.Slot] = item.Entry
+		}
+	}
+	presence := domainworld.PlayerPresence{
+		GUID:         p.GUID,
+		AccountID:    s.account.ID,
+		Name:         p.Name,
+		Team:         race.Team,
+		Race:         p.Race,
+		Class:        p.Class,
+		Map:          p.Map,
+		Zone:         p.Zone,
+		X:            p.X,
+		Y:            p.Y,
+		Z:            p.Z,
+		Orientation:  p.Orientation,
+		Gender:       p.Gender,
+		Level:        p.Level,
+		Power:        uint8(class.Power),
+		Health:       p.Health,
+		MaxHealth:    p.Stats.MaxHealth,
+		Mana:         p.Mana,
+		MaxMana:      p.Stats.MaxMana,
+		Rage:         p.Rage,
+		Energy:       p.Energy,
+		DisplayID:    display,
+		PlayerFlags:  p.PlayerFlags,
+		PlayerBytes:  p.PlayerBytes,
+		PlayerBytes2: p.PlayerBytes2,
+		VisibleItems: visibleItems,
+	}
+	sender := &sessionSender{send: s.send, trySend: s.trySend}
+	if err := h.Broadcast.Register(presence, sender); err != nil {
+		s.log.Warn("world registration failed; broadcasts disabled for this session", "guid", p.GUID, "error", err)
+		return
+	}
+	// Spawn flow: tell nearby players about the new player, and tell the new
+	// player about nearby players. Both directions use CREATE_OBJECT.
+	clock := uint32(time.Now().UnixMilli())
+	// 1. Broadcast self's CREATE_OBJECT to nearby players (not self).
+	spawnPkt := codec.CreateObjectForObserver(presence, clock)
+	h.Broadcast.Broadcast(p.GUID, domainworld.Packet{Opcode: spawnPkt.Opcode, Payload: spawnPkt.Payload}, false)
+	// 2. Send each nearby player's CREATE_OBJECT to the new player.
+	nearby := h.Broadcast.Nearby(p.GUID)
+	for _, np := range nearby {
+		pkt := codec.CreateObjectForObserver(np, clock)
+		_ = s.send(pkt)
+	}
+	s.log.Debug("player spawned in world", "guid", p.GUID, "nearby", len(nearby))
 }
 
 // sendLogoutStandState mirrors Unit::SetStandState: in addition to the
@@ -548,16 +655,17 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		return nil, codec.ValidateRootAck(p.Payload, uint64(s.player.GUID))
 	})
 	// Only the session event loop applies movement. The client renders its own
-	// movement; broadcasting to other players requires the future world loop.
+	// movement; broadcasting to other players is handled by the world
+	// simulation via h.Broadcast (SendMessageToSetExcept equivalent).
 	for _, opcode := range []uint32{op.MSG_MOVE_HEARTBEAT, op.MSG_MOVE_FALL_LAND, op.CMSG_MOVE_FALL_RESET, op.MSG_MOVE_START_FORWARD, op.MSG_MOVE_START_BACKWARD, op.MSG_MOVE_STOP, op.MSG_MOVE_START_STRAFE_LEFT, op.MSG_MOVE_START_STRAFE_RIGHT, op.MSG_MOVE_STOP_STRAFE, op.MSG_MOVE_START_TURN_LEFT, op.MSG_MOVE_START_TURN_RIGHT, op.MSG_MOVE_STOP_TURN, op.MSG_MOVE_SET_FACING, op.MSG_MOVE_JUMP} {
-		add(opcode, handleMovement)
+		add(opcode, h.handleMovement)
 	}
 	for _, opcode := range []uint32{op.MSG_MOVE_SET_RUN_MODE, op.MSG_MOVE_SET_WALK_MODE, op.MSG_MOVE_START_PITCH_UP, op.MSG_MOVE_START_PITCH_DOWN, op.MSG_MOVE_STOP_PITCH, op.MSG_MOVE_SET_PITCH, op.MSG_MOVE_START_SWIM, op.MSG_MOVE_STOP_SWIM} {
-		add(opcode, handleMovement)
+		add(opcode, h.handleMovement)
 	}
 }
 
-func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 	// A late movement packet must not crash or disconnect the session. If the
 	// player is already released (e.g. logout completed in the same tick),
 	// silently drop the packet; the state machine already filtered most late
@@ -572,6 +680,20 @@ func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packe
 	moved := position.X != s.player.X || position.Y != s.player.Y || position.Z != s.player.Z
 	if err = movement.Apply(s.player, position); err != nil {
 		return nil, err
+	}
+	// Update the player's position in the world simulation so future
+	// broadcasts from other players reach the new location, and so this
+	// player's own broadcasts target the right neighbours.
+	if h.Broadcast != nil {
+		_ = h.Broadcast.UpdatePosition(s.player.GUID, s.player.Map, s.player.Zone, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
+	}
+	// Broadcast the movement to other visible players. MaNGOS builds a new
+	// packet with the mover's packed GUID prepended and calls
+	// SendMessageToSetExcept. We do the same: the payload is the client's
+	// MovementInfo with the packed GUID prepended; the opcode stays the same.
+	if h.Broadcast != nil {
+		payload := codec.EncodeMovementBroadcast(s.player.GUID, p.Payload)
+		h.Broadcast.Broadcast(s.player.GUID, domainworld.Packet{Opcode: p.Opcode, Payload: payload}, false)
 	}
 	// Movement cancels the pending logout. The reference's CanFreeMove guard
 	// means the rooted client should not send movement, but the server still

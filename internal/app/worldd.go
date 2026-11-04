@@ -23,6 +23,7 @@ import (
 	store "wowserver/internal/storage/realmd"
 	worldstore "wowserver/internal/storage/world"
 	"wowserver/internal/transport"
+	worldsim "wowserver/internal/world"
 )
 
 func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) error {
@@ -78,8 +79,11 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	if err != nil {
 		return fmt.Errorf("world listen: %w", err)
 	}
-	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local")
-	h := &tbc.Handler{Store: db, Characters: charlist.NewService(chars), Data: data, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
+	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local + broadcast")
+	// The World is the per-realm simulation registry shared by all
+	// connections. It routes broadcast packets between in-world players.
+	sim := worldsim.New()
+	h := &tbc.Handler{Store: db, Characters: charlist.NewService(chars), Data: data, Broadcast: sim, Logger: log, RealmID: c.RealmID, SendQueue: c.SendQueue, IdleTimeout: c.IdleTimeout, RequestTimeout: c.RequestTimeout, OnAuthenticated: transport.CompleteHandshake}
 	h.Creator = charcreate.NewService(profile, creator)
 	h.Deleter = chardelete.NewService(chars)
 	h.Players = worldlogin.NewService(chars)

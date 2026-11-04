@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	domainworld "wowserver/internal/domain/world"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
@@ -63,19 +64,26 @@ func (h *Handler) handleMessageChat(_ context.Context, s *Session, p world.Packe
 	}
 }
 
-// handleSayYellEmote echoes the message to the sender with the matching
-// ChatMsg type. In a real world loop this would broadcast to nearby players
-// via SendMessageToSetInRange.
+// handleSayYellEmote broadcasts the message to nearby players (including
+// the sender). SAY has a ~25-yard radius; YELL has ~50 yards; EMOTE uses
+// the default visibility range. Mirrors MaNGOS Player::Say/Yell/TextEmote
+// which call SendMessageToSetInRange with the appropriate distance.
 func (h *Handler) handleSayYellEmote(s *Session, req codec.ChatRequest, log *slog.Logger) (*world.Packet, error) {
-	// Reference: Player::Say/Yell/TextEmote send to self + nearby set.
-	// Without a set, send to self only.
 	pkt, err := codec.BuildChatPacket(req.Type, req.Language, uint64(s.player.GUID), s.player.Name, 0, req.Message)
 	if err != nil {
 		return nil, err
 	}
 	log.Debug("chat message", "type", req.Type, "guid", s.player.GUID, "bytes", len(req.Message))
-	_ = s.send(pkt)
-	// No direct response needed; the chat packet itself is the delivery.
+	if h.Broadcast != nil {
+		radius := float32(25) // SAY range (CONFIG_FLOAT_LISTEN_RANGE_SAY)
+		if req.Type == codec.ChatMsgYell {
+			radius = 50 // YELL range
+		}
+		h.Broadcast.BroadcastInRange(s.player.GUID, radius,
+			domainworld.Packet{Opcode: pkt.Opcode, Payload: pkt.Payload}, true)
+	} else {
+		_ = s.send(pkt)
+	}
 	return nil, nil
 }
 

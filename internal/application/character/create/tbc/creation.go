@@ -277,25 +277,21 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 		if !ok || count == 0 || item.Stackable < 1 || item.Duration != 0 {
 			return fmt.Errorf("unsupported initial item %d", id)
 		}
-		// This profile supports ordinary armor, one-handed weapons, shields and backpack consumables.
-		if item.Class == 1 || item.InventoryType == 18 || item.InventoryType == 24 {
-			return fmt.Errorf("unsupported container/ammo item %d", id)
-		}
+		// All standard TBC inventory types are supported via equipmentSlots.
+		// Containers (bags, quivers, ammo pouches) go in bag slots 19-22;
+		// ammo (INVTYPE_AMMO = 24) goes to the backpack. No rejection here.
+		// Equipment slot lookup mirrors MaNGOS Player::FindEquipSlot for the
+		// starting-item path. INVTYPE_NON_EQUIP (0) and unknown types go to
+		// the backpack (slot 255). FINGER and TRINKET have two candidate
+		// slots; we try the first, then the second, then fall back to the
+		// backpack — matching StoreNewItemInBestSlots' equip-then-store loop.
+		slots := equipmentSlots(item.InventoryType)
 		slot := uint8(255)
-		switch item.InventoryType {
-		case 4:
-			slot = 3
-		case 7:
-			slot = 6
-		case 8:
-			slot = 7
-		case 13, 21:
-			slot = 15
-		case 14:
-			slot = 16
-		case 0:
-		default:
-			return fmt.Errorf("unsupported starting inventory type %d", item.InventoryType)
+		for _, s := range slots {
+			if !occupied[s] {
+				slot = s
+				break
+			}
 		}
 		for count > 0 {
 			n := min(count, uint32(item.Stackable))
@@ -342,4 +338,64 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 		}
 	}
 	return out, nil
+}
+
+// equipmentSlots returns the ordered list of equipment slot candidates for a
+// given InventoryType, mirroring MaNGOS Player::FindEquipSlot. An empty slice
+// (or one containing only 255) means the item should go to the backpack.
+//
+// INVTYPE values are the 0..28 enum from ItemPrototype.h; EQUIPMENT_SLOT
+// values are the 0..18 enum from Player.h.
+//
+// For FINGER and TRINKET, both candidate slots are returned so the caller
+// can try the second if the first is occupied. For RELIC, the slot depends
+// on the item's subclass and the class that can use it; for starting items
+// we always return RANGED because the starting outfit only ships relics for
+// classes that can equip them in that slot.
+func equipmentSlots(invType uint32) []uint8 {
+	const backpack = uint8(255)
+	switch invType {
+	case 0: // INVTYPE_NON_EQUIP
+		return []uint8{backpack}
+	case 1: // INVTYPE_HEAD
+		return []uint8{0}
+	case 2: // INVTYPE_NECK
+		return []uint8{1}
+	case 3: // INVTYPE_SHOULDERS
+		return []uint8{2}
+	case 4: // INVTYPE_BODY (shirt)
+		return []uint8{3}
+	case 5, 20: // INVTYPE_CHEST, INVTYPE_ROBE
+		return []uint8{4}
+	case 6: // INVTYPE_WAIST
+		return []uint8{5}
+	case 7: // INVTYPE_LEGS
+		return []uint8{6}
+	case 8: // INVTYPE_FEET
+		return []uint8{7}
+	case 9: // INVTYPE_WRISTS
+		return []uint8{8}
+	case 10: // INVTYPE_HANDS
+		return []uint8{9}
+	case 11: // INVTYPE_FINGER
+		return []uint8{10, 11} // FINGER1, FINGER2
+	case 12: // INVTYPE_TRINKET
+		return []uint8{12, 13} // TRINKET1, TRINKET2
+	case 13, 17, 21: // INVTYPE_WEAPON, INVTYPE_2HWEAPON, INVTYPE_WEAPONMAINHAND
+		return []uint8{15} // MAINHAND
+	case 14, 22, 23: // INVTYPE_SHIELD, INVTYPE_WEAPONOFFHAND, INVTYPE_HOLDABLE
+		return []uint8{16} // OFFHAND
+	case 15, 25, 26, 28: // INVTYPE_RANGED, INVTYPE_THROWN, INVTYPE_RANGEDRIGHT, INVTYPE_RELIC
+		return []uint8{17} // RANGED
+	case 16: // INVTYPE_CLOAK
+		return []uint8{14} // BACK
+	case 18: // INVTYPE_BAG (bags, quivers, ammo pouches)
+		return []uint8{19, 20, 21, 22} // INVENTORY_SLOT_BAG_START..END
+	case 19: // INVTYPE_TABARD
+		return []uint8{18}
+	case 24: // INVTYPE_AMMO (arrows, bullets — stored in backpack)
+		return []uint8{backpack}
+	default:
+		return []uint8{backpack}
+	}
 }

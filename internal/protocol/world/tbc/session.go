@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 	"wowserver/internal/domain/account"
+	domainworld "wowserver/internal/domain/world"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
@@ -22,7 +23,8 @@ type WorldSessionStore interface {
 }
 
 // Handler must be shared by all connections of this realm and never copied.
-// It owns a process-local admission registry; it does not model a game world.
+// It owns a process-local admission registry and a reference to the shared
+// world simulation (Broadcaster) used for packet routing between players.
 type Handler struct {
 	Players                     PlayerStore
 	Creator                     CharacterCreator
@@ -30,6 +32,7 @@ type Handler struct {
 	Characters                  CharacterStore
 	Data                        *gamedata.Catalog // Immutable startup snapshot, used by later character phases.
 	Store                       WorldSessionStore
+	Broadcast                   domainworld.Broadcaster // May be nil; broadcast is skipped when nil.
 	Logger                      *slog.Logger
 	RealmID                     uint32
 	SendQueue                   int
@@ -233,6 +236,17 @@ func (h *Handler) runSession(parent context.Context, conn net.Conn, reader *Read
 			}
 		}
 		return nil
+	}
+	// trySend is the non-blocking path used by broadcasts. A full queue drops
+	// the packet rather than stalling the broadcast loop; the dropped packet
+	// is logged at debug by the caller if needed.
+	s.trySend = func(p world.Packet) bool {
+		select {
+		case queue <- p:
+			return true
+		default:
+			return false
+		}
 	}
 	s.onTick = h.playerTick
 	defer func() {

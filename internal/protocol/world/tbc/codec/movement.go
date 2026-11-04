@@ -72,3 +72,36 @@ func ValidateRootAck(payload []byte, guid uint64) error {
 	}
 	return ValidateMovement(r.Bytes(r.Remaining()))
 }
+
+// EncodeMovementBroadcast prepends the mover's packed GUID to the client's
+// movement payload, producing the broadcast form used by SendMessageToSet.
+//
+// The client sends MSG_MOVE_* packets without a GUID prefix (the server
+// knows who sent it). For broadcast, the server prepends a packed GUID so
+// receiving clients know which mover the movement applies to.
+//
+// Packed GUID format: 1 mask byte (bit i set → byte i of the GUID follows),
+// then the non-zero bytes of the GUID in ascending order. A player GUID
+// is uint32 in TBC (HIGHGUID_PLAYER is 0), so the packed form is 1-5 bytes.
+//
+// Reference: MovementHandler.cpp HandleMovementOpcodes builds the packet as
+// `data << mover->GetPackGUID(); movementInfo.Write(data);` then calls
+// SendMessageToSetExcept.
+func EncodeMovementBroadcast(guid uint32, payload []byte) []byte {
+	var mask byte
+	var guidBytes [4]byte
+	n := 0
+	for i := uint(0); i < 4; i++ {
+		v := byte(guid >> (8 * i))
+		if v != 0 {
+			mask |= 1 << i
+			guidBytes[n] = v
+			n++
+		}
+	}
+	out := make([]byte, 1+n+len(payload))
+	out[0] = mask
+	copy(out[1:1+n], guidBytes[:n])
+	copy(out[1+n:], payload)
+	return out
+}
