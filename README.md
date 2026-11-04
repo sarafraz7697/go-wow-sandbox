@@ -4,7 +4,7 @@
 
 مرجع اصلی رفتار و ساختار داده‌ها **[MaNGOS One](https://github.com/mangosone/server)** است. این پروژه مستقل و غیررسمی است و ادعای پیاده‌سازی کامل MaNGOS، آمادگی production یا وابستگی رسمی به Blizzard یا تیم MaNGOS ندارد.
 
-در حال حاضر احراز هویت، Realm List، فهرست کاراکترها، ساخت محدود Human Warrior، ورود کاراکترهای موجود و حرکت محلی پیاده شده‌اند. محاسبات stat، رفتار خروج و بخش‌های world هنوز در حال تکمیل و اعتبارسنجی‌اند. سیستم combat، spell، quest و دنیای چندبازیکنه هنوز وجود ندارد.
+در حال حاضر احراز هویت، Realm List، فهرست کاراکترها، ساخت تمام race/class‌های موجود در `playercreateinfo`، ورود کاراکترهای موجود و حرکت محلی پیاده شده‌اند. خروج کاراکتر شامل countdown ۲۰ثانیه‌ای، فریز (root + sit) و خروج فوری در محدودهٔ areatrigger_tavern (tavern/rest areas) است. **سیستم broadcast و world simulation** شامل spawn/despawn (CREATE_OBJECT/DESTROY_OBJECT)، visibility-based broadcast، movement echo، NAME_QUERY برای بازیکنان دیگر، SAY/YELL/EMOTE chat broadcast، **chat channels (CMSG_JOIN_CHANNEL/LEAVE_CHANNEL/Say)**، whisper به بازیکنان دیگر و ۱به۱ (SendTo) پیاده شده است. محاسبات stat و بخش‌های combat/spell/quest هنوز در حال تکمیل‌اند.
 
 **مستند واحد پروژه:** [PROJECT.md](docs/PROJECT.md) — معماری، راه‌اندازی، وضعیت واقعی امکانات، تفاوت‌ها با مرجع، محدودیت‌ها، شواهد بررسی و قدم بعدی.
 

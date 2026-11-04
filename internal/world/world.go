@@ -38,22 +38,25 @@ const DefaultVisibilityRange float32 = 90.0
 type entry struct {
 	presence domainworld.PlayerPresence
 	sender   domainworld.Sender
+	channels map[string]bool // channel names this player is in
 }
 
 // World is the per-realm simulation registry. It owns the list of
 // players currently in-world and implements domain/world.Broadcaster.
+// It also owns the chat channel registry.
 //
 // One World instance is shared by all connections of a realm; it is
 // constructed at worldd startup and passed to each Handler via the
 // app composition root.
 type World struct {
-	mu      sync.RWMutex
-	players map[uint32]*entry
+	mu       sync.RWMutex
+	players  map[uint32]*entry
+	channels map[string]*Channel // channel name -> Channel
 }
 
 // New constructs an empty World.
 func New() *World {
-	return &World{players: make(map[uint32]*entry)}
+	return &World{players: make(map[uint32]*entry), channels: make(map[string]*Channel)}
 }
 
 // Register adds a player to the simulation. Returns ErrPlayerExists if
@@ -107,6 +110,18 @@ func (w *World) Get(guid uint32) (domainworld.PlayerPresence, bool) {
 	return e.presence, true
 }
 
+// All returns a snapshot of every in-world player's presence. Used by
+// whisper name lookup. Not part of the Broadcaster interface.
+func (w *World) All() []domainworld.PlayerPresence {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := make([]domainworld.PlayerPresence, 0, len(w.players))
+	for _, e := range w.players {
+		out = append(out, e.presence)
+	}
+	return out
+}
+
 // Nearby returns the presences of all players on the same map as srcGUID
 // within DefaultVisibilityRange. The source player is excluded.
 //
@@ -145,4 +160,82 @@ func (w *World) Count() int {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return len(w.players)
+}
+
+// --- Channel management ---
+
+// JoinChannel adds a player to the named channel, creating the channel if
+// it does not exist. Returns the channel (so the caller can send notify
+// packets) and the list of existing member senders (so the caller can
+// broadcast the "player joined" notify).
+func (w *World) JoinChannel(name string, guid uint32, sender domainworld.Sender) (*Channel, []domainworld.Sender, bool) {
+	w.mu.Lock()
+	ch, ok := w.channels[name]
+	if !ok {
+		ch = newChannel(name, 0)
+		w.channels[name] = ch
+	}
+	w.mu.Unlock()
+	// Track channel membership on the player entry so Unregister can clean up.
+	w.mu.RLock()
+	if e, ok := w.players[guid]; ok {
+		if e.channels == nil {
+			e.channels = make(map[string]bool)
+		}
+		e.channels[name] = true
+	}
+	w.mu.RUnlock()
+	_, existing := ch.Members()
+	wasNew := ch.Join(guid, sender)
+	return ch, existing, wasNew
+}
+
+// LeaveChannel removes a player from the named channel. Returns the
+// channel (may be nil if it was destroyed) and the remaining member
+// senders (for the "player left" notify).
+func (w *World) LeaveChannel(name string, guid uint32) (*Channel, []domainworld.Sender) {
+	w.mu.Lock()
+	ch, ok := w.channels[name]
+	w.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	remaining := ch.Leave(guid)
+	// Remove channel membership from the player entry.
+	w.mu.RLock()
+	if e, ok := w.players[guid]; ok && e.channels != nil {
+		delete(e.channels, name)
+	}
+	w.mu.RUnlock()
+	// Destroy empty channels.
+	if ch.Empty() {
+		w.mu.Lock()
+		delete(w.channels, name)
+		w.mu.Unlock()
+		return nil, remaining
+	}
+	return ch, remaining
+}
+
+// GetChannel returns the channel by name, or nil if it does not exist.
+func (w *World) GetChannel(name string) *Channel {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.channels[name]
+}
+
+// PlayerChannels returns the names of channels a player is in.
+// Used by Unregister to clean up channel membership on logout.
+func (w *World) PlayerChannels(guid uint32) []string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	e, ok := w.players[guid]
+	if !ok || e.channels == nil {
+		return nil
+	}
+	out := make([]string, 0, len(e.channels))
+	for name := range e.channels {
+		out = append(out, name)
+	}
+	return out
 }

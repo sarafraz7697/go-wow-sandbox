@@ -109,3 +109,19 @@ func NameQuery(p *character.Player) (world.Packet, error) {
 	b, e := w.Result()
 	return world.Packet{Opcode: op.SMSG_NAME_QUERY_RESPONSE, Payload: b}, e
 }
+
+// NameQueryFromPresence builds SMSG_NAME_QUERY_RESPONSE from a world
+// PlayerPresence (used when the queried player is another in-world
+// player, not the sender's own session player).
+func NameQueryFromPresence(name string, guid, race, gender, class uint32) (world.Packet, error) {
+	w := wire.NewWriter(128)
+	w.Uint64(uint64(guid))
+	w.CString(name, 48)
+	w.Uint8(0)
+	w.Uint32(race)
+	w.Uint32(gender)
+	w.Uint32(class)
+	w.Uint8(0)
+	b, e := w.Result()
+	return world.Packet{Opcode: op.SMSG_NAME_QUERY_RESPONSE, Payload: b}, e
+}

@@ -349,21 +349,120 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 	}
 	return nil
 }
+
+// joinChannel adds the session's player to a chat channel and sends the
+// notify packets. Mirrors Channel::Join + MakeYouJoined + MakeJoined.
+func (h *Handler) joinChannel(s *Session, name string, channelID uint32) {
+	type channelWorld interface {
+		JoinChannel(string, uint32, domainworld.Sender) (interface {
+			Name() string
+			Flags() uint8
+			Count() int
+			IsMember(uint32) bool
+			Empty() bool
+		}, []domainworld.Sender, bool)
+	}
+	w, ok := h.Broadcast.(channelWorld)
+	if !ok {
+		return
+	}
+	sender := &sessionSender{send: s.send, trySend: s.trySend}
+	ch, existing, _ := w.JoinChannel(name, s.player.GUID, sender)
+	if ch == nil {
+		return
+	}
+	// Send YOU_JOINED to the joining player.
+	notify := codec.BuildChannelNotifyYouJoined(name, ch.Flags(), channelID)
+	_ = s.send(notify)
+	// Broadcast JOINED (someone joined) to existing members.
+	joined := codec.BuildChannelNotifyJoined(name, s.player.GUID)
+	for _, es := range existing {
+		es.TrySend(domainworld.Packet{Opcode: joined.Opcode, Payload: joined.Payload})
+	}
+	s.log.Debug("player joined channel", "channel", name, "guid", s.player.GUID, "members", ch.Count())
+}
+
+// leaveChannel removes the session's player from a chat channel and sends
+// the notify packets. Mirrors Channel::Leave + MakeYouLeft + MakeLeft.
+func (h *Handler) leaveChannel(s *Session, name string) {
+	type channelWorld interface {
+		LeaveChannel(string, uint32) (interface {
+			Name() string
+			Count() int
+		}, []domainworld.Sender)
+	}
+	w, ok := h.Broadcast.(channelWorld)
+	if !ok {
+		return
+	}
+	ch, remaining := w.LeaveChannel(name, s.player.GUID)
+	// Send YOU_LEFT to the leaving player.
+	left := codec.BuildChannelNotifyYouLeft(name, 0)
+	_ = s.send(left)
+	// Broadcast LEFT (someone left) to remaining members.
+	notify := codec.BuildChannelNotifyLeft(name, s.player.GUID)
+	for _, rs := range remaining {
+		rs.TrySend(domainworld.Packet{Opcode: notify.Opcode, Payload: notify.Payload})
+	}
+	if ch != nil {
+		s.log.Debug("player left channel", "channel", name, "guid", s.player.GUID, "members", ch.Count())
+	}
+}
+
 func (h *Handler) registerPlayerRoutes(router *Router) {
 	router.routes[op.CMSG_PLAYER_LOGIN] = route{[]State{StateAuthed}, h.playerLogin}
 	inWorld := []State{StateInWorld, StateLoggingOut}
 	add := func(opcode uint32, fn handlerFunc) { router.routes[opcode] = route{inWorld, fn} }
+	// Channel system opcodes. These require the World to be a concrete
+	// *world.World (or implement the channel methods); if Broadcast is the
+	// NoopBroadcaster, these are no-ops.
+	add(op.CMSG_JOIN_CHANNEL, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if s.player == nil {
+			return nil, nil
+		}
+		name, pass, chId, err := codec.DecodeJoinChannel(p.Payload)
+		if err != nil {
+			return nil, err
+		}
+		_ = pass // password support is future work; we accept any
+		h.joinChannel(s, name, chId)
+		return nil, nil
+	})
+	add(op.CMSG_LEAVE_CHANNEL, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if s.player == nil {
+			return nil, nil
+		}
+		name, err := codec.DecodeLeaveChannel(p.Payload)
+		if err != nil {
+			return nil, err
+		}
+		h.leaveChannel(s, name)
+		return nil, nil
+	})
 	add(op.CMSG_NAME_QUERY, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
 		guid := r.Uint64()
 		if e := r.Finish(); e != nil {
 			return nil, e
 		}
-		if s.player == nil || guid != uint64(s.player.GUID) {
+		if s.player == nil {
 			return nil, nil
 		}
-		result, e := codec.NameQuery(s.player)
-		return &result, e
+		// Self query: use the session's own player snapshot.
+		if guid == uint64(s.player.GUID) {
+			result, e := codec.NameQuery(s.player)
+			return &result, e
+		}
+		// Other player: look up in the world registry.
+		if h.Broadcast != nil {
+			if presence, ok := h.Broadcast.(interface {
+				Get(uint32) (domainworld.PlayerPresence, bool)
+			}).Get(uint32(guid)); ok {
+				result, e := codec.NameQueryFromPresence(presence.Name, presence.GUID, uint32(presence.Race), uint32(presence.Gender), uint32(presence.Class))
+				return &result, e
+			}
+		}
+		return nil, nil
 	})
 	nameQuery := router.routes[op.CMSG_NAME_QUERY]
 	nameQuery.states = []State{StateAuthed, StateInWorld, StateLoggingOut}

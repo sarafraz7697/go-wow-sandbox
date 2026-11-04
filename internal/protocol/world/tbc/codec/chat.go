@@ -182,6 +182,41 @@ func BuildWhisperInform(targetGUID uint64, message string) (world.Packet, error)
 	return BuildChatPacket(ChatMsgWhisperInform, LangUniversal, 0, "", targetGUID, message)
 }
 
+// BuildChannelChatPacket builds SMSG_MESSAGECHAT for a CHANNEL message.
+// The CHANNEL branch writes channelName before the targetGUID field.
+//
+// Reference: ChatHandler::BuildChatPacket CHAT_MSG_CHANNEL branch:
+//
+//	uint8  msgType
+//	uint32 language
+//	uint64 senderGUID
+//	uint32 0
+//	CString channelName
+//	uint64 targetGUID (0 for channel)
+//	uint32 messageLen
+//	CString message
+//	uint8  chatTag
+func BuildChannelChatPacket(msgType uint8, language uint32, senderGUID uint64, senderName, channelName, message string) (world.Packet, error) {
+	if len(message) > 255 {
+		return world.Packet{}, ErrChatTooLong
+	}
+	w := wire.NewWriter(MaxServerPayload)
+	w.Uint8(msgType)
+	w.Uint32(language)
+	w.Uint64(senderGUID)
+	w.Uint32(0)
+	w.CString(channelName, 128)
+	w.Uint64(0) // targetGUID for channel
+	w.Uint32(uint32(len(message) + 1))
+	w.CString(message, 255)
+	w.Uint8(ChatTagNone)
+	b, err := w.Result()
+	if err != nil {
+		return world.Packet{}, err
+	}
+	return world.Packet{Opcode: op.SMSG_MESSAGECHAT, Payload: b}, nil
+}
+
 // BuildSystemMessage builds SMSG_MESSAGECHAT with CHAT_MSG_SYSTEM and
 // LANG_UNIVERSAL. Used for server notifications (e.g. "player not found").
 func BuildSystemMessage(message string) (world.Packet, error) {
