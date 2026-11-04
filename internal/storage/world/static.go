@@ -16,11 +16,47 @@ func (s *Store) LoadStatic(ctx context.Context) (gamedata.Rows, error) {
 		table, sql string
 		scan       func(*sql.Rows) error
 	}{
-		{"creature_template", "SELECT Entry,GREATEST(Family,0) FROM creature_template ORDER BY Entry", func(r *sql.Rows) error {
-			var v gamedata.Creature
-			err := r.Scan(&v.ID, &v.Family)
-			out.Creatures = append(out.Creatures, v)
-			return err
+		// creature_template: full row for CREATE_OBJECT + CMSG_CREATURE_QUERY.
+		{"creature_template", "SELECT entry,name,subname,minlevel,maxlevel,modelid_1,faction_A,faction_H,npcflag,unit_flags,type,family,rank,minhealth,maxhealth,minmana,maxmana FROM creature_template ORDER BY entry", func(r *sql.Rows) error {
+			var v gamedata.CreatureTemplate
+			err := r.Scan(&v.ID, &v.Name, &v.SubName, &v.MinLevel, &v.MaxLevel, &v.ModelID, &v.FactionAlliance, &v.FactionHorde, &v.NPCFlags, &v.UnitFlags, &v.CreatureType, &v.Family, &v.Rank, &v.MinHealth, &v.MaxHealth, &v.MinMana, &v.MaxMana)
+			if err != nil {
+				return err
+			}
+			out.CreatureTemplates = append(out.CreatureTemplates, v)
+			// Keep the old (ID, Family) Creature for pet lookups.
+			out.Creatures = append(out.Creatures, gamedata.Creature{ID: v.ID, Family: v.Family})
+			return nil
+		}},
+		// gameobject_template: full row for CREATE_OBJECT + CMSG_GAMEOBJECT_QUERY.
+		{"gameobject_template", "SELECT entry,type,displayId,name,faction,flags,size FROM gameobject_template ORDER BY entry", func(r *sql.Rows) error {
+			var v gamedata.GameObjectTemplate
+			err := r.Scan(&v.ID, &v.Type, &v.DisplayID, &v.Name, &v.Faction, &v.Flags, &v.Size)
+			if err != nil {
+				return err
+			}
+			out.GameObjectTemplates = append(out.GameObjectTemplates, v)
+			return nil
+		}},
+		// creature spawns: the `creature` table. One row = one spawn point.
+		{"creature", "SELECT guid,id,map,position_x,position_y,position_z,orientation,curhealth,curmana FROM creature ORDER BY guid", func(r *sql.Rows) error {
+			var v gamedata.CreatureSpawn
+			err := r.Scan(&v.GUID, &v.Entry, &v.Map, &v.X, &v.Y, &v.Z, &v.Orientation, &v.Health, &v.Mana)
+			if err != nil {
+				return err
+			}
+			out.CreatureSpawns = append(out.CreatureSpawns, v)
+			return nil
+		}},
+		// gameobject spawns: the `gameobject` table. One row = one spawn point.
+		{"gameobject", "SELECT guid,id,map,position_x,position_y,position_z,orientation,rotation0,rotation1,rotation2,rotation3,state,animprogress FROM gameobject ORDER BY guid", func(r *sql.Rows) error {
+			var v gamedata.GameObjectSpawn
+			err := r.Scan(&v.GUID, &v.Entry, &v.Map, &v.X, &v.Y, &v.Z, &v.Orientation, &v.Rotation0, &v.Rotation1, &v.Rotation2, &v.Rotation3, &v.State, &v.AnimProgress)
+			if err != nil {
+				return err
+			}
+			out.GameObjectSpawns = append(out.GameObjectSpawns, v)
+			return nil
 		}},
 		{"playercreateinfo", "SELECT race,class,map,zone,position_x,position_y,position_z,orientation FROM playercreateinfo ORDER BY race,class", func(r *sql.Rows) error {
 			var v gamedata.Start

@@ -45,6 +45,7 @@ func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
 	if err := c.loadTaverns(db, client); err != nil {
 		return nil, err
 	}
+	c.loadSpawns(db)
 	if err := c.validateCompleteness(db, maxLevel); err != nil {
 		return nil, err
 	}
@@ -200,6 +201,32 @@ func (c *Catalog) loadTaverns(db Rows, client ClientData) error {
 		c.taverns[t.ID] = t
 	}
 	return nil
+}
+
+// loadSpawns copies creature and gameobject spawn data from the world DB
+// rows into the catalog. Spawns whose template entry is missing from the
+// catalog are silently skipped (the reference logs and continues).
+func (c *Catalog) loadSpawns(db Rows) {
+	c.creatureSpawns = make([]CreatureSpawn, 0, len(db.CreatureSpawns))
+	for _, s := range db.CreatureSpawns {
+		if s.GUID == 0 || s.Entry == 0 {
+			continue
+		}
+		if _, ok := c.creatureTemplates[s.Entry]; !ok {
+			continue
+		}
+		c.creatureSpawns = append(c.creatureSpawns, s)
+	}
+	c.goSpawns = make([]GameObjectSpawn, 0, len(db.GameObjectSpawns))
+	for _, s := range db.GameObjectSpawns {
+		if s.GUID == 0 || s.Entry == 0 {
+			continue
+		}
+		if _, ok := c.goTemplates[s.Entry]; !ok {
+			continue
+		}
+		c.goSpawns = append(c.goSpawns, s)
+	}
 }
 
 func (c *Catalog) loadProgression(db Rows, maxLevel uint32) error {

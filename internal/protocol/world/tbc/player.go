@@ -248,7 +248,45 @@ func (h *Handler) registerInWorld(s *Session, p *character.Player) {
 		pkt := codec.CreateObjectForObserver(np, clock)
 		_ = s.send(pkt)
 	}
-	s.log.Debug("player spawned in world", "guid", p.GUID, "nearby", len(nearby))
+	// 3. Spawn nearby creatures and gameobjects. The visibility radius
+	// matches DEFAULT_VISIBILITY_DISTANCE (90 yards). We track which
+	// objects we've spawned so handleMovement can despawn ones the player
+	// has moved away from.
+	h.spawnNearbyObjects(s)
+	s.log.Debug("player spawned in world", "guid", p.GUID, "nearby_players", len(nearby))
+}
+
+// spawnNearbyObjects sends CREATE_OBJECT for all creatures and gameobjects
+// within the default visibility radius of the player's current position.
+// Called on world enter and when the player moves far enough to need a
+// visibility refresh.
+func (h *Handler) spawnNearbyObjects(s *Session) {
+	if s.player == nil || h.Data == nil {
+		return
+	}
+	const radius = 90.0 // DEFAULT_VISIBILITY_DISTANCE
+	clock := uint32(time.Now().UnixMilli())
+	// Creatures.
+	creatures := h.Data.CreatureSpawnsNear(s.player.Map, s.player.X, s.player.Y, s.player.Z, radius)
+	for _, cs := range creatures {
+		tmpl, ok := h.Data.CreatureTemplate(cs.Entry)
+		if !ok {
+			continue
+		}
+		pkt := codec.CreateObjectForCreature(cs, tmpl, clock)
+		_ = s.send(pkt)
+	}
+	// Gameobjects.
+	gos := h.Data.GameObjectSpawnsNear(s.player.Map, s.player.X, s.player.Y, s.player.Z, radius)
+	for _, gs := range gos {
+		tmpl, ok := h.Data.GameObjectTemplate(gs.Entry)
+		if !ok {
+			continue
+		}
+		pkt := codec.CreateObjectForGameObject(gs, tmpl)
+		_ = s.send(pkt)
+	}
+	s.log.Debug("spawned nearby objects", "guid", s.player.GUID, "creatures", len(creatures), "gameobjects", len(gos))
 }
 
 // sendLogoutStandState mirrors Unit::SetStandState: in addition to the

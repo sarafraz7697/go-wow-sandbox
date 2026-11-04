@@ -65,17 +65,21 @@ type Level struct {
 type ClassLevel struct{ Class, Level, Health, Mana uint32 }
 type XP struct{ Level, Next uint32 }
 type Rows struct {
-	ItemDetails []ItemDetails
-	Creatures   []Creature
-	Starts      []Start
-	Items       []Item
-	StartItems  []StartItem
-	Spells      []StartSpell
-	Actions     []Action
-	Levels      []Level
-	ClassLevels []ClassLevel
-	XP          []XP
-	Reserved    []string
+	ItemDetails         []ItemDetails
+	Creatures           []Creature
+	CreatureTemplates   []CreatureTemplate
+	GameObjectTemplates []GameObjectTemplate
+	CreatureSpawns      []CreatureSpawn
+	GameObjectSpawns    []GameObjectSpawn
+	Starts              []Start
+	Items               []Item
+	StartItems          []StartItem
+	Spells              []StartSpell
+	Actions             []Action
+	Levels              []Level
+	ClassLevels         []ClassLevel
+	XP                  []XP
+	Reserved            []string
 	// TavernTriggerIDs are the ids listed in the world DB's areatrigger_tavern
 	// table. The catalog joins them against AreaTrigger.dbc to produce
 	// TavernTrigger rows.
@@ -107,29 +111,33 @@ type outfitKey struct {
 	Gender, ID uint8
 }
 type Catalog struct {
-	cooldowns        map[uint32]SpellCooldown
-	itemDetails      map[uint32]ItemDetails
-	factionIndices   map[uint32]int32
-	enchantments     map[uint32]Enchantment
-	creatures        map[uint32]Creature
-	skippedZeroItems int
-	races            map[uint32]Race
-	classes          map[uint32]Class
-	maps             map[uint32]Map
-	pairs            map[Pair]bool
-	starts           map[Pair]Start
-	outfits          map[outfitKey]Outfit
-	items            map[uint32]Item
-	spells           map[uint32]bool
-	startItems       map[Pair][]StartItem
-	startSpells      map[Pair][]uint32
-	actions          map[Pair][]Action
-	levels           map[levelKey]Level
-	classLevels      map[classLevelKey]ClassLevel
-	xp               map[uint32]uint32
-	reserved         map[string]bool
-	taverns          map[uint32]TavernTrigger
-	summary          Summary
+	cooldowns         map[uint32]SpellCooldown
+	itemDetails       map[uint32]ItemDetails
+	factionIndices    map[uint32]int32
+	enchantments      map[uint32]Enchantment
+	creatures         map[uint32]Creature
+	creatureTemplates map[uint32]CreatureTemplate
+	goTemplates       map[uint32]GameObjectTemplate
+	creatureSpawns    []CreatureSpawn
+	goSpawns          []GameObjectSpawn
+	skippedZeroItems  int
+	races             map[uint32]Race
+	classes           map[uint32]Class
+	maps              map[uint32]Map
+	pairs             map[Pair]bool
+	starts            map[Pair]Start
+	outfits           map[outfitKey]Outfit
+	items             map[uint32]Item
+	spells            map[uint32]bool
+	startItems        map[Pair][]StartItem
+	startSpells       map[Pair][]uint32
+	actions           map[Pair][]Action
+	levels            map[levelKey]Level
+	classLevels       map[classLevelKey]ClassLevel
+	xp                map[uint32]uint32
+	reserved          map[string]bool
+	taverns           map[uint32]TavernTrigger
+	summary           Summary
 }
 
 func (c *Catalog) Summary() Summary              { return c.summary }
@@ -187,3 +195,47 @@ func (c *Catalog) ClassIDs() []uint32 {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
+
+// CreatureSpawnsNear returns all creature spawns on the given map whose
+// position is within radius of (x, y, z). Used by the protocol layer to
+// build CREATE_OBJECT blocks for nearby creatures when a player enters
+// the world or moves into visibility range.
+func (c *Catalog) CreatureSpawnsNear(mapID uint32, x, y, z, radius float32) []CreatureSpawn {
+	radius2 := radius * radius
+	out := make([]CreatureSpawn, 0, 32)
+	for _, s := range c.creatureSpawns {
+		if s.Map != mapID {
+			continue
+		}
+		dx, dy, dz := s.X-x, s.Y-y, s.Z-z
+		if dx*dx+dy*dy+dz*dz <= radius2 {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// GameObjectSpawnsNear returns all gameobject spawns on the given map whose
+// position is within radius of (x, y, z).
+func (c *Catalog) GameObjectSpawnsNear(mapID uint32, x, y, z, radius float32) []GameObjectSpawn {
+	radius2 := radius * radius
+	out := make([]GameObjectSpawn, 0, 32)
+	for _, s := range c.goSpawns {
+		if s.Map != mapID {
+			continue
+		}
+		dx, dy, dz := s.X-x, s.Y-y, s.Z-z
+		if dx*dx+dy*dy+dz*dz <= radius2 {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// CreatureTemplateCount, GameObjectTemplateCount, CreatureSpawnCount,
+// GameObjectSpawnCount return the number of loaded entries. Used for
+// startup logging.
+func (c *Catalog) CreatureTemplateCount() int   { return len(c.creatureTemplates) }
+func (c *Catalog) GameObjectTemplateCount() int { return len(c.goTemplates) }
+func (c *Catalog) CreatureSpawnCount() int      { return len(c.creatureSpawns) }
+func (c *Catalog) GameObjectSpawnCount() int    { return len(c.goSpawns) }

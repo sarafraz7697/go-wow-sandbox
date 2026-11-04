@@ -30,11 +30,17 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	log := logger(c.LogLevel, logOutput, c.LogColor)
 	// This composition root deliberately binds protocol, DBC and native persistence to 8606.
 	log.Info("worldd starting", "build", 8606, "persistence", "mangosone8606", "realm_id", c.RealmID, "log_level", c.LogLevel)
+
+	p := NewProgress(log, "worldd startup")
+
+	p.Step(5, "connecting to auth database")
 	db, err := store.Open(ctx, c.DSN())
 	if err != nil {
 		return err
 	}
 	defer db.DB.Close()
+
+	p.Step(10, "checking auth database schema")
 	checkCtx, end := context.WithTimeout(ctx, c.RequestTimeout)
 	err = db.Check(checkCtx)
 	if err == nil {
@@ -44,16 +50,22 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	if err != nil {
 		return err
 	}
+
+	p.Step(20, "loading static data (DBC + world DB)")
 	data, err := loadStatic(ctx, c, log)
 	if err != nil {
 		return err
 	}
+
+	p.Step(60, "connecting to character database")
 	chars, err := characterstore.Open(ctx, c.CharacterDSN())
 	if err != nil {
 		return err
 	}
 	defer chars.DB.Close()
 	chars.SetIdleTimeout(c.IdleTimeout)
+
+	p.Step(65, "checking character database schema")
 	charCtx, charCancel := context.WithTimeout(ctx, c.RequestTimeout)
 	err = chars.CheckEnumeration(charCtx)
 	if err == nil {
@@ -64,6 +76,8 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 		return err
 	}
 	log.Info("character database connected", "realm_id", c.RealmID)
+
+	p.Step(70, "loading character creation profile (DBC)")
 	creationCtx, creationCancel := context.WithTimeout(ctx, c.DataLoadTimeout)
 	profile, err := creationTBC.Load(creationCtx, c.DBCPath, data)
 	if err != nil {
@@ -75,11 +89,14 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	if err != nil {
 		return fmt.Errorf("creation storage: %w", err)
 	}
+
+	p.Step(85, "opening world listener")
 	ln, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return fmt.Errorf("world listen: %w", err)
 	}
-	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local + broadcast")
+
+	p.Step(90, "initializing world simulation")
 	// The World is the per-realm simulation registry shared by all
 	// connections. It routes broadcast packets between in-world players.
 	sim := worldsim.New()
@@ -88,6 +105,9 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	h.Deleter = chardelete.NewService(chars)
 	h.Players = worldlogin.NewService(chars)
 	creator.Logger = log
+
+	p.Done("worldd ready, accepting connections")
+	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local + broadcast")
 	server := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: log, Handle: h.Serve}
 	return server.Serve(ctx, ln)
 }
@@ -108,6 +128,6 @@ func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger) (*g
 	if s.SkippedZeroItems > 0 {
 		log.Warn("ignored item_template entry zero", "rows", s.SkippedZeroItems)
 	}
-	log.Info("static data loaded", "races", s.Races, "classes", s.Classes, "maps", s.Maps, "creation_pairs", s.Pairs, "outfits", s.Outfits, "spells", s.Spells, "items", s.Items, "start_items", s.StartItems, "start_spells", s.StartSpells, "actions", s.Actions, "levels", s.Levels, "class_levels", s.ClassLevels, "xp_levels", s.XP, "reserved_names", s.Reserved)
+	log.Info("static data loaded", "races", s.Races, "classes", s.Classes, "maps", s.Maps, "creation_pairs", s.Pairs, "outfits", s.Outfits, "spells", s.Spells, "items", s.Items, "start_items", s.StartItems, "start_spells", s.StartSpells, "actions", s.Actions, "levels", s.Levels, "class_levels", s.ClassLevels, "xp_levels", s.XP, "reserved_names", s.Reserved, "creature_templates", data.CreatureTemplateCount(), "go_templates", data.GameObjectTemplateCount(), "creature_spawns", data.CreatureSpawnCount(), "go_spawns", data.GameObjectSpawnCount())
 	return data, nil
 }
