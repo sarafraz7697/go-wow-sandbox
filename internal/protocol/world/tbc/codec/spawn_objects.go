@@ -51,13 +51,13 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 	// UNIT_FIELD_BYTES_0: race(0) | class(0) | gender(0) | powerType(0) — all 0 for creature
 	fields[f.UNIT_FIELD_LEVEL] = tmpl.MinLevel
 	fields[f.UNIT_FIELD_FACTIONTEMPLATE] = tmpl.FactionAlliance
-	fields[f.UNIT_FIELD_MAXHEALTH] = tmpl.MaxHealth
+	fields[f.UNIT_FIELD_MAXHEALTH] = tmpl.MaxLevelHealth
 	health := spawn.Health
-	if health == 0 || health > tmpl.MaxHealth {
-		health = tmpl.MaxHealth
+	if health == 0 || health > tmpl.MaxLevelHealth {
+		health = tmpl.MaxLevelHealth
 	}
 	fields[f.UNIT_FIELD_HEALTH] = health
-	fields[f.UNIT_FIELD_MAXPOWER1] = tmpl.MaxMana
+	fields[f.UNIT_FIELD_MAXPOWER1] = tmpl.MaxLevelMana
 	fields[f.UNIT_FIELD_POWER1] = spawn.Mana
 	fields[f.UNIT_FIELD_FLAGS] = tmpl.UnitFlags
 	fields[f.UNIT_FIELD_BYTES_1] = 0 // stand state 0 (stand)
@@ -65,14 +65,16 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 	fields[f.UNIT_MOD_CAST_SPEED] = math.Float32bits(1)
 	fields[f.UNIT_FIELD_BOUNDINGRADIUS] = math.Float32bits(0.5)
 	fields[f.UNIT_FIELD_COMBATREACH] = math.Float32bits(1.5)
-	fields[f.UNIT_FIELD_DISPLAYID] = tmpl.ModelID
-	fields[f.UNIT_FIELD_NATIVEDISPLAYID] = tmpl.ModelID
+	// Creatures use the first model from ModelId[MAX_CREATURE_MODEL]; the
+	// reference selects one in Creature::Create when modelid_override is set.
+	fields[f.UNIT_FIELD_DISPLAYID] = tmpl.ModelId[0]
+	fields[f.UNIT_FIELD_NATIVEDISPLAYID] = tmpl.ModelId[0]
 	fields[f.UNIT_FIELD_BASEATTACKTIME] = 2000
 	fields[f.UNIT_FIELD_BASEATTACKTIME+1] = 2000
 	// NPC flags (UNIT_NPC_FLAGS = 168) come straight from the template so the
 	// client shows gossip/vendor/quest markers (the reference sets them when
 	// loading the creature before the first values update).
-	fields[f.UNIT_NPC_FLAGS] = tmpl.NPCFlags
+	fields[f.UNIT_NPC_FLAGS] = tmpl.NpcFlags
 
 	w := wire.NewWriter(MaxServerPayload)
 	w.Uint32(1) // block count: one object

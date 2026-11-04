@@ -535,6 +535,33 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		result, e := codec.ItemQuery(id, h.Data)
 		return &result, e
 	})
+	// Reference: WorldSession::HandleCreatureQueryOpcode and
+	// HandleGameObjectQueryOpcode in game/WorldHandlers/QueryHandler.cpp.
+	// The client sends these on first sighting of a creature/gameobject to
+	// populate its WDB cache; without a response the client falls back to the
+	// localized "<unknown>" string. Both packets carry uint32 entry + uint64
+	// guid; the guid is unused for the lookup (the entry alone identifies the
+	// template).
+	add(op.CMSG_CREATURE_QUERY, func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
+		r := wire.NewReader(p.Payload)
+		entry := r.Uint32()
+		r.Uint64() // guid; unused (template lookup is by entry)
+		if e := r.Finish(); e != nil {
+			return nil, e
+		}
+		result, e := codec.CreatureQuery(entry, h.Data)
+		return &result, e
+	})
+	add(op.CMSG_GAMEOBJECT_QUERY, func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
+		r := wire.NewReader(p.Payload)
+		entry := r.Uint32()
+		r.Uint64() // guid; unused (template lookup is by entry)
+		if e := r.Finish(); e != nil {
+			return nil, e
+		}
+		result, e := codec.GameObjectQuery(entry, h.Data)
+		return &result, e
+	})
 	add(op.CMSG_SET_ACTIVE_MOVER, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
 		guid := r.Uint64()

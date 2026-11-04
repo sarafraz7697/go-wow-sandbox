@@ -8,43 +8,85 @@ type Enchantment struct {
 	Condition                   uint32
 }
 
-// CreatureTemplate is the static creature_template row. Only fields needed
-// for the CREATE_OBJECT update block and CMSG_CREATURE_QUERY_RESPONSE are
-// loaded; the full template has ~50 fields.
+// MAX_CREATURE_MODEL matches MAX_CREATURE_MODEL in Creature.h: four
+// alternative display models per template. SMSG_CREATURE_QUERY_RESPONSE
+// sends all four; CREATE_OBJECT only needs the first.
+const MAX_CREATURE_MODEL = 4
+
+// MAX_GAMEOBJECT_TEMPLATE_DATA matches the 24 type-specific uint32 data
+// slots (data0..data23) of GameObjectInfo in the mangos-one reference.
+// SMSG_GAMEOBJECT_QUERY_RESPONSE ships the first 6 (24 bytes) raw as
+// info->raw.data.
+const MAX_GAMEOBJECT_TEMPLATE_DATA = 24
+
+// CreatureTemplate mirrors the CreatureInfo struct in the mangos-one 2.4.3
+// reference (Object/Creature.h). Fields the project does not yet consume
+// (combat/loot/trainer data) are omitted; everything needed for CREATE_OBJECT,
+// CMSG_CREATURE_QUERY_RESPONSE and creature-spawn validation is present.
 //
-// Reference: CreatureInfo in Creature.h, creature_template table.
+// Field names and ordering follow the C++ struct so a side-by-side read
+// against the reference is direct. The DB column names used by the loader
+// match the project schema (CamelCase: ModelId1..4, FactionAlliance,
+// FactionHorde, NpcFlags, UnitFlags, CreatureType, MinLevelHealth, ...).
+//
+// Reference: CreatureInfo in Creature.h, creature_template table; source
+// format string CreatureInfosrcfmt in SQLStorages.cpp.
 type CreatureTemplate struct {
-	ID              uint32
-	Name            string
-	SubName         string
-	MinLevel        uint32
-	MaxLevel        uint32
-	ModelID         uint32 // first model from ModelId[0]
-	FactionAlliance uint32
-	FactionHorde    uint32
-	NPCFlags        uint32
-	UnitFlags       uint32
-	CreatureType    uint32
-	Family          uint32
-	Rank            uint32
-	// Health/mana at min and max level (from creature_template).
-	MinHealth, MaxHealth uint32
-	MinMana, MaxMana     uint32
+	Entry             uint32
+	Name              string
+	SubName           string
+	IconName          string
+	MinLevel          uint32
+	MaxLevel          uint32
+	HeroicEntry       uint32
+	ModelId           [MAX_CREATURE_MODEL]uint32
+	FactionAlliance   uint32
+	FactionHorde      uint32
+	Scale             float32
+	Family            uint32
+	CreatureType      uint32
+	InhabitType       uint32
+	RegenerateStats   uint32
+	RacialLeader      bool
+	NpcFlags          uint32
+	UnitFlags         uint32
+	DynamicFlags      uint32
+	ExtraFlags        uint32
+	CreatureTypeFlags uint32
+	SpeedWalk         float32
+	SpeedRun          float32
+	UnitClass         uint32
+	Rank              uint32
+	Expansion         int32
+	HealthMultiplier  float32
+	PowerMultiplier   float32
+	MinLevelHealth    uint32
+	MaxLevelHealth    uint32
+	MinLevelMana      uint32
+	MaxLevelMana      uint32
+	PetSpellDataId    uint32
+	MovementType      uint32
 }
 
-// GameObjectTemplate is the static gameobject_template row. Only fields
-// needed for the CREATE_OBJECT update block and CMSG_GAMEOBJECT_QUERY_RESPONSE
-// are loaded.
+// GameObjectTemplate mirrors the GameObjectInfo struct in the mangos-one
+// 2.4.3 reference (Object/GameObject.h). Data carries the type-specific
+// slots (data0..data23) that SMSG_GAMEOBJECT_QUERY_RESPONSE ships raw as
+// 24 bytes (info->raw.data). IconName and CastBarCaption are needed for
+// the same response packet.
 //
-// Reference: GameObjectInfo in GameObject.h, gameobject_template table.
+// Reference: GameObjectInfo in GameObject.h, gameobject_template table;
+// source format string GameObjectInfosrcfmt in SQLStorages.cpp.
 type GameObjectTemplate struct {
-	ID        uint32
-	Type      uint32 // GAMEOBJECT_TYPE_* from SharedDefines.h
-	DisplayID uint32
-	Name      string
-	Faction   uint32
-	Flags     uint32
-	Size      float32
+	ID             uint32
+	Type           uint32 // GAMEOBJECT_TYPE_* from SharedDefines.h
+	DisplayID      uint32
+	Name           string
+	IconName       string
+	CastBarCaption string
+	Faction        uint32
+	Flags          uint32
+	Size           float32
+	Data           [MAX_GAMEOBJECT_TEMPLATE_DATA]uint32 // data0..data23
 }
 
 // CreatureSpawn is one row from the `creature` table (a spawn point).
@@ -110,13 +152,13 @@ func (c *Catalog) loadVisuals(client ClientData, db Rows) error {
 		c.creatures[v.ID] = v
 	}
 	for _, v := range db.CreatureTemplates {
-		if v.ID == 0 {
+		if v.Entry == 0 {
 			continue
 		}
-		if _, ok := c.creatureTemplates[v.ID]; ok {
-			return fmt.Errorf("duplicate creature_template %d", v.ID)
+		if _, ok := c.creatureTemplates[v.Entry]; ok {
+			return fmt.Errorf("duplicate creature_template %d", v.Entry)
 		}
-		c.creatureTemplates[v.ID] = v
+		c.creatureTemplates[v.Entry] = v
 	}
 	for _, v := range db.GameObjectTemplates {
 		if v.ID == 0 {
