@@ -17,7 +17,13 @@ func (s *Store) LoadStatic(ctx context.Context) (gamedata.Rows, error) {
 		scan       func(*sql.Rows) error
 	}{
 		// creature_template: full row for CREATE_OBJECT + CMSG_CREATURE_QUERY.
-		{"creature_template", "SELECT entry,name,subname,minlevel,maxlevel,modelid_1,faction_A,faction_H,npcflag,unit_flags,type,family,rank,minhealth,maxhealth,minmana,maxmana FROM creature_template ORDER BY entry", func(r *sql.Rows) error {
+		// Column names follow the mangos-one 8606 world schema: ModelId1 (was
+		// modelid_1), FactionAlliance/FactionHorde (faction_A/H), NpcFlags,
+		// UnitFlags, CreatureType (type), MinLevelHealth/MaxLevelHealth and
+		// MinLevelMana/MaxLevelMana (minhealth/maxhealth/minmana/maxmana).
+		// `Rank` is backticked (reserved word on MySQL 8.0+) and the nullable
+		// SubName is COALESCEd to ''.
+		{"creature_template", "SELECT Entry,Name,COALESCE(SubName,''),MinLevel,MaxLevel,ModelId1,FactionAlliance,FactionHorde,NpcFlags,UnitFlags,CreatureType,Family,`Rank`,MinLevelHealth,MaxLevelHealth,MinLevelMana,MaxLevelMana FROM creature_template ORDER BY Entry", func(r *sql.Rows) error {
 			var v gamedata.CreatureTemplate
 			err := r.Scan(&v.ID, &v.Name, &v.SubName, &v.MinLevel, &v.MaxLevel, &v.ModelID, &v.FactionAlliance, &v.FactionHorde, &v.NPCFlags, &v.UnitFlags, &v.CreatureType, &v.Family, &v.Rank, &v.MinHealth, &v.MaxHealth, &v.MinMana, &v.MaxMana)
 			if err != nil {
