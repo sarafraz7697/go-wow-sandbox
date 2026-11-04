@@ -10,7 +10,7 @@ import (
 // New validates and atomically constructs a snapshot. This implementation
 // rejects incomplete data instead of silently inventing later-level stats.
 func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
-	c := &Catalog{races: map[uint32]Race{}, classes: map[uint32]Class{}, maps: map[uint32]Map{}, pairs: map[Pair]bool{}, starts: map[Pair]Start{}, outfits: map[outfitKey]Outfit{}, items: map[uint32]Item{}, spells: map[uint32]bool{}, startItems: map[Pair][]StartItem{}, startSpells: map[Pair][]uint32{}, actions: map[Pair][]Action{}, levels: map[levelKey]Level{}, classLevels: map[classLevelKey]ClassLevel{}, xp: map[uint32]uint32{}, reserved: map[string]bool{}}
+	c := &Catalog{races: map[uint32]Race{}, classes: map[uint32]Class{}, maps: map[uint32]Map{}, pairs: map[Pair]bool{}, starts: map[Pair]Start{}, outfits: map[outfitKey]Outfit{}, items: map[uint32]Item{}, spells: map[uint32]bool{}, startItems: map[Pair][]StartItem{}, startSpells: map[Pair][]uint32{}, actions: map[Pair][]Action{}, levels: map[levelKey]Level{}, classLevels: map[classLevelKey]ClassLevel{}, xp: map[uint32]uint32{}, reserved: map[string]bool{}, taverns: map[uint32]TavernTrigger{}}
 	if maxLevel < 1 || maxLevel > 255 {
 		return nil, fmt.Errorf("invalid max level")
 	}
@@ -42,10 +42,13 @@ func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
 	if err := c.loadProgression(db, maxLevel); err != nil {
 		return nil, err
 	}
+	if err := c.loadTaverns(db, client); err != nil {
+		return nil, err
+	}
 	if err := c.validateCompleteness(db, maxLevel); err != nil {
 		return nil, err
 	}
-	c.summary = Summary{len(c.races), len(c.classes), len(c.maps), len(c.starts), len(c.outfits), len(c.spells), len(c.items), len(db.StartItems), len(db.Spells), len(db.Actions), len(c.levels), len(c.classLevels), len(c.xp), len(c.reserved), c.skippedZeroItems}
+	c.summary = Summary{len(c.races), len(c.classes), len(c.maps), len(c.starts), len(c.outfits), len(c.spells), len(c.items), len(db.StartItems), len(db.Spells), len(db.Actions), len(c.levels), len(c.classLevels), len(c.xp), len(c.reserved), c.skippedZeroItems, len(c.taverns)}
 	return c, nil
 }
 
@@ -171,6 +174,30 @@ func (c *Catalog) loadCreation(client ClientData, db Rows) error {
 			}
 		}
 		c.actions[v.Pair] = append(c.actions[v.Pair], v)
+	}
+	return nil
+}
+
+// loadTaverns joins Rows.TavernTriggerIDs (the world DB's areatrigger_tavern
+// table) against the AreaTrigger.dbc rows the client loader shipped. Only
+// triggers that exist in both are kept; a tavern id with no DBC row is
+// silently dropped to mirror the reference's "skip and log" behavior.
+func (c *Catalog) loadTaverns(db Rows, client ClientData) error {
+	if len(db.TavernTriggerIDs) == 0 {
+		return nil
+	}
+	want := make(map[uint32]bool, len(db.TavernTriggerIDs))
+	for _, id := range db.TavernTriggerIDs {
+		want[id] = true
+	}
+	for _, t := range client.AreaTriggers {
+		if !want[t.ID] {
+			continue
+		}
+		if _, dup := c.taverns[t.ID]; dup {
+			return fmt.Errorf("duplicate areatrigger_tavern id %d", t.ID)
+		}
+		c.taverns[t.ID] = t
 	}
 	return nil
 }

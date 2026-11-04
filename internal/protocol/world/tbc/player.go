@@ -143,6 +143,21 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 	s.syncPending = nil
 	return nil
 }
+
+// sendLogoutStandState mirrors Unit::SetStandState: in addition to the
+// partial UPDATE_OBJECT that rewrites UNIT_FIELD_BYTES_1 byte 0, the
+// reference also sends the standalone SMSG_STANDSTATE_UPDATE packet.
+// Sending both matches MaNGOS byte-for-byte; some clients rely on the
+// standalone message to animate the body and not just update the field.
+func (h *Handler) sendLogoutStandState(s *Session, state uint8) {
+	if s.player == nil {
+		return
+	}
+	if upd, e := codec.LogoutStateUpdate(s.player.GUID, state); e == nil {
+		_ = s.send(upd)
+	}
+	_ = s.send(codec.StandStateMessage(state))
+}
 func (h *Handler) sendTimeSync(s *Session) error {
 	now := time.Now()
 	s.nextSync = now.Add(10 * time.Second)
@@ -164,6 +179,23 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 		return nil
 	}
 	now := time.Now()
+	// Resting housekeeping: if the player is resting in a tavern, re-check
+	// their position against the trigger volume every tick. MaNGOS does this
+	// in UpdateAreaZoneAndOutdoors on zone change; we don't have zone-update
+	// geometry yet, so a per-tick check is the cheapest correct source.
+	// If the player left the volume, clear Resting and send a partial update
+	// clearing PLAYER_FLAGS_RESTING.
+	if s.player.Resting && s.player.InnTriggerID != 0 {
+		t, ok := h.Data.TavernTrigger(s.player.InnTriggerID)
+		if !ok || !codec.IsPointInAreaTrigger(t, s.player.Map, s.player.X, s.player.Y, s.player.Z, 5) {
+			s.player.Resting = false
+			s.player.InnTriggerID = 0
+			s.log.Debug("player left tavern; resting cleared", "guid", s.player.GUID)
+			if upd, e := codec.RestingStateUpdate(s.player.GUID, s.player.PlayerFlags, false); e == nil {
+				_ = s.send(upd)
+			}
+		}
+	}
 	if s.state == StateLoggingOut && !s.logoutAt.IsZero() && !now.Before(s.logoutAt) {
 		saveCtx, end := context.WithTimeout(ctx, h.RequestTimeout)
 		defer end()
@@ -274,20 +306,54 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		if s.player == nil {
 			return nil, nil
 		}
+		// Reference: HandleLogoutRequestOpcode. instantLogout is true when the
+		// player is resting (PLAYER_FLAGS_RESTING), on a taxi, or has GM
+		// permission. We support the resting path here; taxi and GM come later.
+		instantLogout := s.player.Resting
+		if instantLogout {
+			// Mirror LogoutPlayer(true): save+release synchronously, return
+			// StateAuthed, send LOGOUT_RESPONSE(reason=0, instant=1) then
+			// LOGOUT_COMPLETE. No countdown, no root, no sit.
+			s.log.Debug("instant logout (resting)", "guid", s.player.GUID)
+			saveCtx, end := context.WithTimeout(ctx, h.RequestTimeout)
+			defer end()
+			if err := h.releasePlayer(saveCtx, s); err != nil {
+				// A transient DB error must not drop the session: fall back
+				// to the countdown path so the tick loop retries the save.
+				s.log.Warn("instant logout save failed; falling back to countdown", "guid", s.player.GUID, "error", err)
+				if e := s.transition(StateLoggingOut); e != nil {
+					return nil, e
+				}
+				s.logoutAt = time.Now().Add(20 * time.Second)
+				h.sendLogoutStandState(s, codec.StandStateSit)
+				s.send(codec.ForceMoveRoot(s.player.GUID))
+				resp := codec.LogoutResponse(0, false)
+				return &resp, nil
+			}
+			if err := s.transition(StateAuthed); err != nil {
+				return nil, err
+			}
+			_ = s.send(codec.LogoutResponse(0, true))
+			_ = s.send(world.Packet{Opcode: op.SMSG_LOGOUT_COMPLETE})
+			return nil, nil
+		}
 		if e := s.transition(StateLoggingOut); e != nil {
 			return nil, e
 		}
-		// Without rest-area geometry or GM policy, use the normal 20-second path.
 		s.logoutAt = time.Now().Add(20 * time.Second)
 		s.log.Debug("logout countdown started", "guid", s.player.GUID)
-		// Reference: HandleLogoutRequestOpcode sits the player so the logout
-		// countdown animation plays. We send a partial UPDATE_OBJECT that
-		// changes UNIT_FIELD_BYTES_1 byte 0 (stand state) to SIT. On cancel
-		// or movement-cancelled logout, we revert to STAND.
-		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateSit); e == nil {
-			_ = s.send(upd)
-		}
-		return &world.Packet{Opcode: op.SMSG_LOGOUT_RESPONSE, Payload: make([]byte, 5)}, nil
+		// Reference: HandleLogoutRequestOpcode sits the player and roots them
+		// before starting the countdown, so the client cannot move while the
+		// countdown ticks. We mirror MaNGOS exactly:
+		//   SetStandState(UNIT_STAND_STATE_SIT)  -> partial UPDATE_OBJECT + SMSG_STANDSTATE_UPDATE
+		//   SetRoot(true)                         -> SMSG_FORCE_MOVE_ROOT
+		//   UNIT_FLAG_STUNNED                      -> intentionally NOT set here; the
+		//      reference sets it together with SetRoot, but without a virtual-item /
+		//      sheath pipeline the stunned flag makes the client draw weapons.
+		h.sendLogoutStandState(s, codec.StandStateSit)
+		s.send(codec.ForceMoveRoot(s.player.GUID))
+		resp := codec.LogoutResponse(0, false)
+		return &resp, nil
 	}}
 	router.routes[op.CMSG_LOGOUT_CANCEL] = route{[]State{StateLoggingOut, StateInWorld}, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		if len(p.Payload) != 0 {
@@ -298,11 +364,11 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 			if e := s.transition(StateInWorld); e != nil {
 				return nil, e
 			}
-			// Stand the player back up.
+			// Reference: HandleLogoutCancelOpcode stands the player up and
+			// removes the root before the cancel ack is sent.
 			if s.player != nil {
-				if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand); e == nil {
-					_ = s.send(upd)
-				}
+				h.sendLogoutStandState(s, codec.StandStateStand)
+				s.send(codec.ForceMoveUnroot(s.player.GUID))
 			}
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
@@ -409,6 +475,43 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		}
 		return nil, nil
 	})
+	// Reference: HandleAreaTriggerOpcode. We only implement the tavern/inn
+	// branch: if the trigger id is in areatrigger_tavern, set REST_TYPE_IN_TAVERN
+	// (PLAYER_FLAGS_RESTING). Teleport triggers, quest triggers and city rest
+	// (REST_TYPE_IN_CITY, which needs AreaTable's AREA_FLAG_CAPITAL) are out of
+	// scope for this slice.
+	add(op.CMSG_AREATRIGGER, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
+		if s.player == nil {
+			return nil, nil
+		}
+		r := wire.NewReader(p.Payload)
+		id := r.Uint32()
+		if e := r.Finish(); e != nil {
+			return nil, e
+		}
+		t, ok := h.Data.TavernTrigger(id)
+		if !ok {
+			return nil, nil
+		}
+		// Position validation. delta matches the reference's 5-yard tolerance.
+		if !codec.IsPointInAreaTrigger(t, s.player.Map, s.player.X, s.player.Y, s.player.Z, 5) {
+			s.log.Debug("areatrigger: player not in trigger volume", "id", id)
+			return nil, nil
+		}
+		if !s.player.Resting {
+			s.player.Resting = true
+			s.player.InnTriggerID = id
+			s.log.Debug("player entered tavern", "trigger", id, "guid", s.player.GUID)
+			if upd, e := codec.RestingStateUpdate(s.player.GUID, s.player.PlayerFlags, true); e == nil {
+				_ = s.send(upd)
+			}
+		} else if s.player.InnTriggerID != id {
+			// Already resting from a different tavern; switch the trigger id
+			// without flipping the flag.
+			s.player.InnTriggerID = id
+		}
+		return nil, nil
+	})
 	add(op.CMSG_SET_SELECTION, consume(8))
 	add(op.CMSG_STANDSTATECHANGE, consume(4))
 	add(op.CMSG_MOVE_TIME_SKIPPED, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
@@ -470,15 +573,22 @@ func handleMovement(_ context.Context, s *Session, p world.Packet) (*world.Packe
 	if err = movement.Apply(s.player, position); err != nil {
 		return nil, err
 	}
-	// Movement cancels the pending logout now that the player is not rooted.
+	// Movement cancels the pending logout. The reference's CanFreeMove guard
+	// means the rooted client should not send movement, but the server still
+	// honours a stop/heartbeat that follows the client's own input. We stand
+	// the player up AND remove the root, mirroring HandleLogoutCancelOpcode.
 	if s.state == StateLoggingOut && (moved || p.Opcode == op.MSG_MOVE_JUMP) {
 		if err = s.transition(StateInWorld); err != nil {
 			return nil, err
 		}
 		s.logoutAt = time.Time{}
-		// Stand the player back up.
-		if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand); e == nil {
-			_ = s.send(upd)
+		// The stand-state packets need the GUID; the player is still on s.
+		if s.player != nil {
+			if upd, e := codec.LogoutStateUpdate(s.player.GUID, codec.StandStateStand); e == nil {
+				_ = s.send(upd)
+			}
+			_ = s.send(codec.StandStateMessage(codec.StandStateStand))
+			_ = s.send(codec.ForceMoveUnroot(s.player.GUID))
 		}
 		return &world.Packet{Opcode: op.SMSG_LOGOUT_CANCEL_ACK}, nil
 	}

@@ -93,7 +93,7 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 		mark("done")
 		log.Debug("character creation storage finished", "elapsed_ms", float64(time.Since(started).Microseconds())/1000, "write_statements", writes)
 	}()
-	if a.ID == 0 || a.ID > math.MaxUint32 || p.Request.Race != 1 || p.Request.Class != 1 {
+	if a.ID == 0 || a.ID > math.MaxUint32 {
 		return 0, character.ErrDisabled
 	}
 	conn, err := s.db.Conn(ctx)

@@ -4,6 +4,7 @@ package tbc
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"wowserver/internal/dbc"
 	"wowserver/internal/gamedata"
@@ -44,6 +45,16 @@ func (r *record) u(offset int) uint32 {
 	v, e := r.file.Uint32(r.index, offset)
 	r.err = e
 	return v
+}
+
+// f32 reads a little-endian float field at byte offset.
+func (r *record) f32(offset int) float32 {
+	if r.err != nil {
+		return 0
+	}
+	v, e := r.file.Uint32(r.index, offset)
+	r.err = e
+	return math.Float32frombits(v)
 }
 func (r *record) b(offset int) byte {
 	if r.err != nil {
@@ -99,7 +110,11 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 		return nil
 	}
 	if err := load("ChrRaces", 69, 276, func(r *record) {
-		data.Races = append(data.Races, gamedata.Race{ID: r.u(0), Faction: r.u(8), MaleDisplay: r.u(16), FemaleDisplay: r.u(20), Expansion: r.u(272), Name: r.name(14, locale)})
+		// Field layout matches DBCStructure.h ChrRacesEntry: ID(0),
+		// FactionID(2, byte offset 8), MaleDisplayID(4, offset 16),
+		// FemaleDisplayID(5, offset 20), BaseLanguage(8, offset 32),
+		// CinematicSequenceID(13, offset 52), Name_lang(14-29, locale).
+		data.Races = append(data.Races, gamedata.Race{ID: r.u(0), Faction: r.u(8), MaleDisplay: r.u(16), FemaleDisplay: r.u(20), Team: r.u(32), Expansion: r.u(272), Name: r.name(14, locale)})
 	}); err != nil {
 		return data, err
 	}
@@ -167,6 +182,25 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}
 	if !spellFound || !mapFound {
 		return data, fmt.Errorf("DBC version markers missing; re-extract from 2.4.3 build 8606")
+	}
+	// AreaTrigger.dbc feeds the inn/tavern resting pipeline. Layout is the
+	// 10-field "niffffffff" format from DBCfmt.h: id(0), mapid(4), x/y/z(8/12/16),
+	// radius(20), box_x/y/z(24/28/32), box_orientation(36). 10*4 = 40 bytes/row.
+	if err := load("AreaTrigger", 10, 40, func(r *record) {
+		data.AreaTriggers = append(data.AreaTriggers, gamedata.TavernTrigger{
+			ID:             r.u(0),
+			Map:            r.u(4),
+			X:              r.f32(8),
+			Y:              r.f32(12),
+			Z:              r.f32(16),
+			Radius:         r.f32(20),
+			BoxX:           r.f32(24),
+			BoxY:           r.f32(28),
+			BoxZ:           r.f32(32),
+			BoxOrientation: r.f32(36),
+		})
+	}); err != nil {
+		return data, err
 	}
 	return data, nil
 }

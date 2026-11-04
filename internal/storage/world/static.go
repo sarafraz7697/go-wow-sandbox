@@ -76,6 +76,12 @@ func (s *Store) LoadStatic(ctx context.Context) (gamedata.Rows, error) {
 			out.Reserved = append(out.Reserved, v)
 			return err
 		}},
+		{"areatrigger_tavern", "SELECT id FROM areatrigger_tavern ORDER BY id", func(r *sql.Rows) error {
+			var v uint32
+			err := r.Scan(&v)
+			out.TavernTriggerIDs = append(out.TavernTriggerIDs, v)
+			return err
+		}},
 	}
 	for _, q := range queries {
 		if err := s.readStatic(ctx, q.sql, q.scan); err != nil {

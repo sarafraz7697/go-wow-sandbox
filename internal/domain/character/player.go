@@ -24,6 +24,15 @@ type Player struct {
 	Reputations                                  []Reputation
 	Items                                        []PlayerItem
 	Entered                                      bool
+	// Resting mirrors PLAYER_FLAGS_RESTING (0x20). True while the player is
+	// inside an areatrigger_tavern volume; the logout handler uses it to take
+	// the instant-logout path the reference calls LogoutPlayer(true).
+	Resting bool
+	// InnTriggerID is the AreaTrigger.dbc id of the tavern the player is
+	// currently resting in. Zero when not resting. The tick loop re-checks
+	// the player's position against this trigger's volume every tick and
+	// clears Resting when the player leaves.
+	InnTriggerID uint32
 }
 type Reputation struct {
 	Faction, Flags uint32
