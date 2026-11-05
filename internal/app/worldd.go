@@ -52,7 +52,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	}
 
 	p.Step(20, "loading static data (DBC + world DB)")
-	data, err := loadStatic(ctx, c, log)
+	data, err := loadStatic(ctx, c, log, p)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	server := transport.Server{MaxConnections: c.MaxConnections, SessionTimeout: c.AuthTimeout, Logger: log, Handle: h.Serve}
 	return server.Serve(ctx, ln)
 }
-func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger) (*gamedata.Catalog, error) {
+func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger, p *Progress) (*gamedata.Catalog, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.DataLoadTimeout)
 	defer cancel()
 	log.Info("loading static data", "dbc_path", c.DBCPath, "dbc_locale", c.DBCLocale)
@@ -120,7 +120,17 @@ func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger) (*g
 		return nil, err
 	}
 	defer db.DB.Close()
-	data, err := dataTBC.Load(ctx, c.DBCPath, c.DBCLocale, db)
+	// Per-table completion lines and capped validation warnings go to the
+	// startup log — the counterpart of MaNGOS's ">> Loaded N ..." and
+	// outErrorDb output.
+	db.Log = log
+	// The world-database load runs through the worldload registry in
+	// MaNGOS order. Progress is reported live, row-weighted across every
+	// registered table (counted up front with SELECT COUNT(*)), and the
+	// 0..100 load percentage is mapped onto the 20..60 band of the
+	// overall startup so the console shows continuous movement instead
+	// of freezing between two coarse steps.
+	data, err := dataTBC.LoadWithProgress(ctx, c.DBCPath, c.DBCLocale, db, p.Band(20, 60))
 	if err != nil {
 		return nil, fmt.Errorf("static data: %w", err)
 	}
@@ -128,6 +138,14 @@ func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger) (*g
 	if s.SkippedZeroItems > 0 {
 		log.Warn("ignored item_template entry zero", "rows", s.SkippedZeroItems)
 	}
-	log.Info("static data loaded", "races", s.Races, "classes", s.Classes, "maps", s.Maps, "creation_pairs", s.Pairs, "outfits", s.Outfits, "spells", s.Spells, "items", s.Items, "start_items", s.StartItems, "start_spells", s.StartSpells, "actions", s.Actions, "levels", s.Levels, "class_levels", s.ClassLevels, "xp_levels", s.XP, "reserved_names", s.Reserved, "creature_templates", data.CreatureTemplateCount(), "go_templates", data.GameObjectTemplateCount(), "creature_spawns", data.CreatureSpawnCount(), "go_spawns", data.GameObjectSpawnCount())
+	log.Info("static data loaded",
+		"races", s.Races, "classes", s.Classes, "maps", s.Maps, "creation_pairs", s.Pairs,
+		"outfits", s.Outfits, "spells", s.Spells, "items", s.Items,
+		"start_items", s.StartItems, "start_spells", s.StartSpells, "actions", s.Actions,
+		"levels", s.Levels, "class_levels", s.ClassLevels, "xp_levels", s.XP,
+		"reserved_names", s.Reserved,
+		"creature_templates", s.CreatureTemplates, "go_templates", s.GameObjectTemplates,
+		"quests", s.Quests,
+		"creature_spawns", data.CreatureSpawnCount(), "go_spawns", data.GameObjectSpawnCount())
 	return data, nil
 }

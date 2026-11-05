@@ -201,11 +201,29 @@ The initial dump had only schema; real mangos1 data and DBC are needed for world
 
 The Catalog is read-only after full load at startup. The world DB is not consumed for static queries during gameplay; changing data requires restart. MyISAM snapshot tables share no transaction, so static data must not be edited during load.
 
-Main DBCs: ChrRaces, ChrClasses, CharBaseInfo, CharStartOutfit, Map, Spell, Item, SpellItemEnchantment, and Faction. The creation initializer also reads CharSections, CharacterFacialHairStyles, SkillLine, and SkillLineAbility.
+### Entity model (MaNGOS-one parity)
 
-Main TBC layouts: Race=69/276, Class=58/232, CharBaseInfo=2/2, Outfit=41/152, Map=125/500, Spell=216/864, Item=4/16, Enchantment=34/136, Faction=53/212 (fields/record bytes). The WDBC parser checks string boundaries and record length. The loader reads spell ID and cooldown metadata; this does not mean a spell engine.
+World-database entities live in `internal/entity` as field-for-field ports of the reference C++ structs: `CreatureInfo` (all 75 creature_template columns), `CreatureData` (creature spawns), `GameObjectInfo` (gameobject_template with the data0..data23 block), `GameObjectData`, the full `ItemPrototype` (item_template, 135 columns incl. spellppmRate), `Quest` (quest_template, 127 columns plus computed objective counts), vendor/trainer/gossip/npc_text/page_text entities, area triggers, graveyards, exploration XP, pet data, game events, conditions, game_tele, POIs, reputation templates and the player-creation tables. `entity.Dataset` mirrors ObjectMgr's storages (mCreatureDataMap, sGOStorage, sItemStorage, mQuestTemplates, ...).
 
-Item display is corrected from Item.dbc; the database inventory type is preserved. ItemDetails is in memory for client query and equipment stats. Enchant visual and direct enchant effects come from DBC. The item_template row with entry=0 is skipped with a warning and counter; other essential data must not be replaced with fabrications.
+### Loader registry (Open/Closed)
+
+`internal/worldload` loads every table family. Each loader is a self-registering unit in its own file (`init()` + `Register`), runs in the MaNGOS `World::SetInitialWorldSettings` order (order constants are spaced by 100 so new loaders slot in without renumbering), and follows the reference's validation semantics: outErrorDb-style warnings with skip-and-continue, capped at a few lines per table. Adding a new entity family means adding one file; the runner, progress and startup wiring never change.
+
+Loaded families (MaNGOS order): mangos_string, spell_template, instance_template, page_text, gameobject_template, npc_text, item_template, creature_model_info, creature_equip_template (+raw), creature_template_classlevelstats (split per expansion like m_creatureClassLvlStats), creature_template, creature_template_spells, creature_model_race, item_required_target, reputation tables, points_of_interest, petcreateinfo_spell, creature (spawns, LEFT JOINed with game_event/pool tables like LoadCreatures), creature_addon + creature_template_addon, gameobject (spawns, same JOINs), quest_template, quest_relations (split into creature/GO starter/ender maps), conditions, areatrigger_teleport, areatrigger_tavern, game_graveyard_zone, the playercreateinfo family, exploration_basexp, pet_name_generation, pet_levelstats, mail_level_reward, skill_fishing_base_level, game_tele, game_event, npc_vendor(+template), npc_trainer(+template), gossip_menu(+option), reserved_name.
+
+Not yet ported (registry makes each a one-file addition): locales_* tables, loot templates, db_scripts, waypoint/pathing tables, pool_template internals, character-side entities that MaNGOS loads from the characters DB.
+
+### Live startup progress
+
+The runner counts every table up front (`SELECT COUNT(*)`, the BarGoLink budget) and reports a row-weighted percentage while each table streams: `creature_template 45% (23451/52134 rows)`, mapped onto the 20..60 band of the worldd startup. Per-table completion lines (`loaded entity table=creature_template rows=52134 skipped=3 took_ms=812`) and capped validation warnings go to the startup log — the counterpart of MaNGOS `>> Loaded N ...` and outErrorDb output. No step silently blocks the console.
+
+### Catalog and spawn resolution
+
+`gamedata.Catalog` consumes the dataset once and exposes typed lookups (`CreatureTemplate`, `GameObjectTemplate`, `ItemPrototype`, `Quest`, `CreatureModelInfo`, `CreatureClassLvlStats`, spawn queries returning GUID+data pairs). `ResolveCreatureSpawn` ports `Creature::SelectLevel`: level drawn from the template MinLevel..MaxLevel range (deterministically from the spawn GUID where the reference uses urand, so every startup shows the same world), health/mana from creature_template_classlevelstats x template multipliers with the legacy Min/MaxLevelHealth interpolation fallback, modelid_override honored, bounding radius/combat reach from creature_model_info, speeds from template rates over base movement speeds (walk 2.5, run 7.0). The CREATE_OBJECT codec consumes the resolved spawn directly.
+
+Main DBCs: ChrRaces, ChrClasses, CharBaseInfo, CharStartOutfit, Map, Spell, Item, SpellItemEnchantment, Faction. The creation initializer also reads CharSection, CharacterFacialHairStyles, SkillLine, and SkillLineAbility.
+
+Item display is corrected from Item.dbc; the database inventory type is preserved. The item_template row with entry=0 is skipped with a warning and counter; other essential data must not be replaced with fabrications.
 
 ## Network Contract and Login
 

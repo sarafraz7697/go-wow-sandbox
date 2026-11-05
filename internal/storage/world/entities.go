@@ -4,20 +4,28 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"wowserver/internal/entity"
 	"wowserver/internal/storage/sqlutil"
 	"wowserver/internal/worldload"
 )
 
-type Store struct{ DB *sql.DB }
+// Store is the world-database access point. DB is the raw handle for
+// checks; Log (optional) receives worldload's per-table completion lines
+// and capped validation warnings — the Go counterpart of MaNGOS's
+// ">> Loaded N ..." and outErrorDb console output.
+type Store struct {
+	DB  *sql.DB
+	Log *slog.Logger
+}
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	db, err := sqlutil.Open(ctx, dsn)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db}, nil
+	return &Store{DB: db}, nil
 }
 func (s *Store) Check(ctx context.Context) error {
 	return sqlutil.Check(ctx, s.DB, map[string]string{
@@ -36,6 +44,9 @@ func (s *Store) Check(ctx context.Context) error {
 // static loader). Only SELECT is used; nothing queries after startup.
 func (s *Store) LoadWorldEntities(ctx context.Context, dest *entity.Dataset, progress func(pct int, step string)) error {
 	opts := worldload.RunOptions{Logger: slogNoop{}}
+	if s.Log != nil {
+		opts.Logger = s.Log
+	}
 	if progress != nil {
 		opts.Progress = progress
 	}

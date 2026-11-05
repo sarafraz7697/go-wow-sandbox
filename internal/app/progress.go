@@ -52,6 +52,42 @@ func (p *Progress) Stepf(pct int, format string, args ...any) {
 	p.Step(pct, fmt.Sprintf(format, args...))
 }
 
+// Band returns a callback that maps a 0..100 sub-progress onto the
+// [from, to] percent band of the overall startup and reports it as live
+// steps. The worldd startup uses it so the world-database load visibly
+// advances through its band instead of hanging on one line:
+//
+//	p.Band(20, 60)(pct, "creature_template 45% (23451/52134 rows)")
+//
+// The step text is passed through unchanged; only the overall percent is
+// remapped. Repeat percentages are swallowed so the log stays readable.
+func (p *Progress) Band(from, to int) func(pct int, step string) {
+	if from < 0 {
+		from = 0
+	}
+	if to > 100 {
+		to = 100
+	}
+	if to <= from {
+		to = from + 1
+	}
+	last := -1
+	return func(pct int, step string) {
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		overall := from + (to-from)*pct/100
+		if overall == last {
+			return
+		}
+		last = overall
+		p.log.Info("loading progress", "stage", p.name, "step", step, "pct", overall, "elapsed_ms", time.Since(p.start).Milliseconds())
+	}
+}
+
 // Done logs 100% completion with the elapsed time.
 func (p *Progress) Done(msg string) {
 	p.log.Info("loading complete", "stage", p.name, "step", msg, "pct", 100, "elapsed_ms", time.Since(p.start).Milliseconds())

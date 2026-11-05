@@ -50,11 +50,23 @@ func (c Config) DSN() string {
 }
 func (c Config) CharacterDSN() string { return c.CharacterDatabase.DSN() }
 func (c Config) WorldDSN() string     { return c.WorldDatabase.DSN() }
+
 func (database Database) DSN() string {
 	d := mysql.NewConfig()
 	d.Net = "tcp"
 	d.Addr = net.JoinHostPort(database.Host, strconv.Itoa(database.Port))
-	d.DBName, d.User, d.Passwd = database.Name, database.User, database.Password
+	d.DBName = database.Name
+	d.User = database.User
+	d.Passwd = database.Password
+
+	// Connection and socket timeouts.
+	d.Timeout = 10 * time.Second
+	d.ReadTimeout = 5 * time.Minute
+	d.WriteTimeout = 5 * time.Minute
+
+	// Parse MySQL time values.
+	d.ParseTime = true
+
 	return d.FormatDSN()
 }
 
@@ -65,7 +77,7 @@ func Parse(args []string, output io.Writer) (Config, error) {
 func parse(args []string, output io.Writer, service, defaultPath, defaultListen string) (Config, error) {
 	var c Config
 	c.RealmID, c.SendQueue = 1, 64
-	c.DBCPath, c.DataLoadTimeout = "dbc", 60*time.Second
+	c.DBCPath, c.DataLoadTimeout = "dbc", 10*time.Minute
 	var path string
 	f := flag.NewFlagSet(service, flag.ContinueOnError)
 	f.SetOutput(output)
