@@ -535,6 +535,40 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		result, e := codec.ItemQuery(id, h.Data)
 		return &result, e
 	})
+	// CMSG_CREATURE_QUERY / CMSG_GAMEOBJECT_QUERY: uint32 entry + uint64 guid.
+	// Mirrors WorldSession::HandleCreatureQueryOpcode / HandleGameObjectQueryOpcode
+	// (QueryHandler.cpp). Without these routes the client never receives the
+	// template name and shows every NPC as "Unknown".
+	add(op.CMSG_CREATURE_QUERY, func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
+		r := wire.NewReader(p.Payload)
+		entry := r.Uint32()
+		if r.Remaining() == 8 {
+			r.Uint64() // spawn guid, unused
+		}
+		if e := r.Finish(); e != nil {
+			return nil, e
+		}
+		if h.Data == nil {
+			return nil, nil
+		}
+		result, e := codec.CreatureQuery(entry, h.Data)
+		return &result, e
+	})
+	add(op.CMSG_GAMEOBJECT_QUERY, func(_ context.Context, _ *Session, p world.Packet) (*world.Packet, error) {
+		r := wire.NewReader(p.Payload)
+		entry := r.Uint32()
+		if r.Remaining() == 8 {
+			r.Uint64() // spawn guid, unused
+		}
+		if e := r.Finish(); e != nil {
+			return nil, e
+		}
+		if h.Data == nil {
+			return nil, nil
+		}
+		result, e := codec.GameObjectQuery(entry, h.Data)
+		return &result, e
+	})
 	add(op.CMSG_SET_ACTIVE_MOVER, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
 		guid := r.Uint64()

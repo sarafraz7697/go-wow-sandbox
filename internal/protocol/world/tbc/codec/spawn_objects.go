@@ -2,6 +2,7 @@ package codec
 
 import (
 	"math"
+	"time"
 
 	"wowserver/internal/entity"
 	"wowserver/internal/gamedata"
@@ -16,6 +17,15 @@ import (
 const (
 	HighGUIDUnit       = 0xF130
 	HighGUIDGameObject = 0xF110
+)
+
+// GAMEOBJECT_TYPE_* values that change the create-block layout.
+const (
+	goTypeTrap        = 6
+	goTypeTransport   = 11
+	goTypeDuelArbiter = 16
+	goTypeFlagStand   = 24
+	goTypeFlagDrop    = 26
 )
 
 // makeFullGUID combines HIGHGUID, entry and counter into a uint64 using
@@ -49,6 +59,10 @@ func CreateObjectForCreature(spawn gamedata.ResolvedCreatureSpawn, clock uint32)
 	fields[f.OBJECT_FIELD_GUID] = uint32(guid)
 	fields[f.OBJECT_FIELD_GUID+1] = uint32(guid >> 32)
 	fields[f.OBJECT_FIELD_TYPE] = 0x0009 // TYPE_MASK_UNIT = OBJECT | UNIT
+	// OBJECT_FIELD_ENTRY (Object::SetEntry): the client reads the template
+	// entry from here to send CMSG_CREATURE_QUERY. Without it the name is
+	// never resolved and every NPC shows as "Unknown".
+	fields[f.OBJECT_FIELD_ENTRY] = spawn.Entry
 	fields[f.OBJECT_FIELD_SCALE_X] = math.Float32bits(spawn.Scale)
 	// UNIT_FIELD_BYTES_0: race(0) | class(0) | gender(0) | powerType(0) — all 0 for creature
 	fields[f.UNIT_FIELD_LEVEL] = spawn.Level
@@ -75,7 +89,7 @@ func CreateObjectForCreature(spawn gamedata.ResolvedCreatureSpawn, clock uint32)
 	w := wire.NewWriter(MaxServerPayload)
 	w.Uint32(1) // block count: one object
 	w.Uint8(0)  // hasTransport
-	w.Uint8(3)  // UPDATETYPE_CREATE_OBJECT2
+	w.Uint8(2)  // UPDATETYPE_CREATE_OBJECT (creatures use CREATE_OBJECT, not CREATE_OBJECT2)
 	w.PackedGUID(guid)
 	w.Uint8(3)    // TYPEID_UNIT
 	w.Uint8(0x70) // updateFlags: LIVING|HAS_POSITION|HIGHGUID
@@ -131,6 +145,8 @@ func CreateObjectForGameObject(guid uint32, data gamedata.GameObjectSpawnRef, tm
 	fields[f.OBJECT_FIELD_GUID] = uint32(fullGUID)
 	fields[f.OBJECT_FIELD_GUID+1] = uint32(fullGUID >> 32)
 	fields[f.OBJECT_FIELD_TYPE] = 0x0021 // TYPE_MASK_GAMEOBJECT = OBJECT | GAMEOBJECT
+	// OBJECT_FIELD_ENTRY: lets the client issue CMSG_GAMEOBJECT_QUERY.
+	fields[f.OBJECT_FIELD_ENTRY] = data.Data.ID
 	scale := tmpl.Size
 	if scale <= 0 {
 		scale = 1
@@ -155,13 +171,26 @@ func CreateObjectForGameObject(guid uint32, data gamedata.GameObjectSpawnRef, tm
 		fields[f.GAMEOBJECT_ANIMPROGRESS] = 100
 	}
 
+	// Object::BuildCreateUpdateBlockForPlayer: gameobjects use CREATE_OBJECT2
+	// only for traps, duel arbiters and flag stands/drops; TRANSPORT-type
+	// gameobjects additionally carry UPDATEFLAG_TRANSPORT (0x02) and a
+	// trailing uint32 time.
+	updateType := uint8(2) // UPDATETYPE_CREATE_OBJECT
+	updateFlags := uint8(0x58)
+	switch tmpl.Type {
+	case goTypeTrap, goTypeDuelArbiter, goTypeFlagStand, goTypeFlagDrop:
+		updateType = 3 // UPDATETYPE_CREATE_OBJECT2
+	case goTypeTransport:
+		updateFlags |= 0x02
+	}
+
 	w := wire.NewWriter(MaxServerPayload)
 	w.Uint32(1) // block count
 	w.Uint8(0)  // hasTransport
-	w.Uint8(3)  // UPDATETYPE_CREATE_OBJECT2
+	w.Uint8(updateType)
 	w.PackedGUID(fullGUID)
-	w.Uint8(5)    // TYPEID_GAMEOBJECT
-	w.Uint8(0x58) // updateFlags: LOWGUID | HIGHGUID | HAS_POSITION
+	w.Uint8(5) // TYPEID_GAMEOBJECT
+	w.Uint8(updateFlags)
 	// Position for non-living objects: 4 floats
 	w.Float32(data.Data.PosX)
 	w.Float32(data.Data.PosY)
@@ -171,6 +200,10 @@ func CreateObjectForGameObject(guid uint32, data gamedata.GameObjectSpawnRef, tm
 	w.Uint32(guid)
 	// UPDATEFLAG_HIGHGUID section: GetGUIDHigh() for TYPEID_GAMEOBJECT
 	w.Uint32(HighGUIDGameObject)
+	if updateFlags&0x02 != 0 {
+		// UPDATEFLAG_TRANSPORT section: ms time for non-MO transports.
+		w.Uint32(uint32(time.Now().UnixMilli()))
+	}
 	writeValues(w, fields)
 	b, _ := w.Result()
 	return world.Packet{Opcode: op.SMSG_UPDATE_OBJECT, Payload: b}

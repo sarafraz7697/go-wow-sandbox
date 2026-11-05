@@ -95,11 +95,44 @@ func (c *Catalog) loadWorldEntities(db *entity.Dataset) error {
 
 	// Spawns: keep every spawn the loaders accepted (missing templates
 	// were already skipped there, mirroring LoadCreatures/LoadGameObjects).
+	//
+	// Only spawns the reference puts on the map grid at load time are kept:
+	// ObjectMgr::LoadCreatures / LoadGameObjects call AddCreatureToGrid /
+	// AddGameobjectToGrid only when `gameEvent == 0 && GuidPoolId == 0 &&
+	// EntryPoolId == 0` — everything else (holiday event decorations, pooled
+	// spawns) is owned by the GameEvent / Pool systems and appears only when
+	// they activate it. Sending all of them is what produced the stray
+	// platforms and NPCs. spawnMask must also include the regular (0)
+	// difficulty bit, as AddCreatureToGrid iterates the mask bits.
+	eventCreature := make(map[uint32]struct{})
+	for _, guids := range db.GameEventCreatureGUIDs {
+		for _, g := range guids {
+			eventCreature[g] = struct{}{}
+		}
+	}
+	eventGO := make(map[uint32]struct{})
+	for _, guids := range db.GameEventGameObjectGUIDs {
+		for _, g := range guids {
+			eventGO[g] = struct{}{}
+		}
+	}
 	c.creatureSpawns = make([]CreatureSpawnRef, 0, len(db.Creatures))
 	for _, guid := range db.CreatureOrder {
 		data, ok := db.Creatures[guid]
 		if !ok {
 			return fmt.Errorf("creature order references unknown guid %d", guid)
+		}
+		if _, ev := eventCreature[guid]; ev {
+			continue
+		}
+		if _, pooled := db.PoolCreature[guid]; pooled {
+			continue
+		}
+		if _, pooled := db.PoolCreatureTemplate[data.ID]; pooled {
+			continue
+		}
+		if data.SpawnMask&1 == 0 {
+			continue
 		}
 		c.creatureSpawns = append(c.creatureSpawns, CreatureSpawnRef{GUID: guid, Data: data})
 	}
@@ -109,7 +142,27 @@ func (c *Catalog) loadWorldEntities(db *entity.Dataset) error {
 		if !ok {
 			return fmt.Errorf("gameobject order references unknown guid %d", guid)
 		}
+		if _, ev := eventGO[guid]; ev {
+			continue
+		}
+		if _, pooled := db.PoolGameObject[guid]; pooled {
+			continue
+		}
+		if _, pooled := db.PoolGameObjectTemplate[data.ID]; pooled {
+			continue
+		}
+		if data.SpawnMask&1 == 0 {
+			continue
+		}
+		// Transports (GAMEOBJECT_TYPE_MO_TRANSPORT) are driven by the
+		// transport manager in the reference, not by static spawns.
+		if tmpl, ok := db.GameObjectTemplates[data.ID]; ok && tmpl.Type == goTypeMOTransport {
+			continue
+		}
 		c.goSpawns = append(c.goSpawns, GameObjectSpawnRef{GUID: guid, Data: data})
 	}
 	return nil
 }
+
+// goTypeMOTransport is GAMEOBJECT_TYPE_MO_TRANSPORT (15).
+const goTypeMOTransport = 15

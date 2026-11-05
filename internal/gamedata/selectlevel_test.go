@@ -26,10 +26,10 @@ func spawnFixtureCatalog(t *testing.T) *Catalog {
 			entity.CreatureClassLvlStats{Class: 1, Level: level, Expansion: 0, BaseHealth: 30 * level, BaseMana: 10 * level, BaseDamage: 1.5}
 	}
 	db.CreatureModelInfos[398] = entity.CreatureModelInfo{ModelID: 398, BoundingRadius: 0.35, CombatReach: 1.2}
-	db.Creatures[101] = entity.CreatureData{ID: 6, MapID: 0, PosX: 1, PosY: 2, PosZ: 3, Orientation: 4, CurHealth: 0, CurMana: 0}
+	db.Creatures[101] = entity.CreatureData{ID: 6, MapID: 0, PosX: 1, PosY: 2, PosZ: 3, Orientation: 4, CurHealth: 0, CurMana: 0, SpawnMask: 1}
 	db.CreatureOrder = []uint32{101}
 	db.GameObjectTemplates[31] = entity.GameObjectInfo{ID: 31, Type: 3, DisplayID: 10, Name: "Barrel", Size: 2}
-	db.GameObjects[55] = entity.GameObjectData{ID: 31, MapID: 0, PosX: 5, PosY: 6, PosZ: 7, Orientation: 0.5, Rotation3: 1, State: 1, AnimProgress: 42}
+	db.GameObjects[55] = entity.GameObjectData{ID: 31, MapID: 0, PosX: 5, PosY: 6, PosZ: 7, Orientation: 0.5, Rotation3: 1, State: 1, AnimProgress: 42, SpawnMask: 1}
 	db.GameObjectOrder = []uint32{55}
 	c, err := New(client, db, 2)
 	if err != nil {
@@ -128,5 +128,45 @@ func TestSpawnQueriesAndTemplates(t *testing.T) {
 	}
 	if _, ok := c.Creature(6); !ok {
 		t.Fatal("creature family view missing")
+	}
+}
+
+// Spawns owned by the GameEvent / Pool systems (or without the regular
+// spawnMask bit) must not be placed on the map at load time, like
+// ObjectMgr::LoadCreatures / LoadGameObjects.
+func TestSpawnFiltersMirrorReferenceGridRules(t *testing.T) {
+	client, db := creationFixture()
+	db.CreatureTemplates[6] = entity.CreatureInfo{Entry: 6, Name: "A", MinLevel: 1, MaxLevel: 1, ModelId: [4]uint32{1, 0, 0, 0}}
+	db.CreatureTemplates[7] = entity.CreatureInfo{Entry: 7, Name: "B", MinLevel: 1, MaxLevel: 1, ModelId: [4]uint32{1, 0, 0, 0}}
+	db.GameObjectTemplates[31] = entity.GameObjectInfo{ID: 31, Type: 5, DisplayID: 10, Name: "Plat"}
+	db.GameObjectTemplates[32] = entity.GameObjectInfo{ID: 32, Type: 15, DisplayID: 11, Name: "Boat"}
+	mk := func(id uint32, mask uint8) entity.CreatureData {
+		return entity.CreatureData{ID: id, MapID: 0, SpawnMask: mask}
+	}
+	db.Creatures[1] = mk(6, 1) // plain: kept
+	db.Creatures[2] = mk(6, 1) // game event: dropped
+	db.Creatures[3] = mk(6, 1) // pooled by guid: dropped
+	db.Creatures[4] = mk(7, 1) // pooled by entry: dropped
+	db.Creatures[5] = mk(6, 2) // no regular-difficulty bit: dropped
+	db.CreatureOrder = []uint32{1, 2, 3, 4, 5}
+	db.GameEventCreatureGUIDs[12] = []uint32{2}
+	db.PoolCreature[3] = 9
+	db.PoolCreatureTemplate[7] = 10
+	db.GameObjects[1] = entity.GameObjectData{ID: 31, SpawnMask: 1} // kept
+	db.GameObjects[2] = entity.GameObjectData{ID: 31, SpawnMask: 1} // game event: dropped
+	db.GameObjects[3] = entity.GameObjectData{ID: 31, SpawnMask: 1} // pooled: dropped
+	db.GameObjects[4] = entity.GameObjectData{ID: 32, SpawnMask: 1} // MO transport: dropped
+	db.GameObjectOrder = []uint32{1, 2, 3, 4}
+	db.GameEventGameObjectGUIDs[-3] = []uint32{2}
+	db.PoolGameObject[3] = 11
+	c, err := New(client, db, 2)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := c.CreatureSpawnCount(); got != 1 {
+		t.Fatalf("creature spawns = %d, want 1", got)
+	}
+	if got := c.GameObjectSpawnCount(); got != 1 {
+		t.Fatalf("gameobject spawns = %d, want 1", got)
 	}
 }
