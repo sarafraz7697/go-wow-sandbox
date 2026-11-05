@@ -31,7 +31,7 @@ password = 'mangos'
 [data]
 dbc_path = dbc
 dbc_locale = 0
-load_timeout = 60s
+load_timeout = 10m
 
 [database.characters]
 host = 127.0.0.1
