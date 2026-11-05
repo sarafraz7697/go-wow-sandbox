@@ -229,3 +229,91 @@ type AreaTriggerTavern struct {
 	ID   uint32 // `id`
 	Name string // `name`
 }
+
+// PlayerCondition is one `conditions` row (sConditionStorage).
+type PlayerCondition struct {
+	ConditionEntry uint32 // `condition_entry`
+	Type           uint32 // `type`
+	Value1         uint32 // `value1`
+	Value2         uint32 // `value2`
+}
+
+// GameTele is one `game_tele` row (mGameTeleMap).
+type GameTele struct {
+	ID          uint32  // `id`
+	PositionX   float32 // `position_x`
+	PositionY   float32 // `position_y`
+	PositionZ   float32 // `position_z`
+	Orientation float32 // `orientation`
+	Map         uint32  // `map`
+	Name        string  // `name`
+}
+
+// PointOfInterest is one `points_of_interest` row (mPointsOfInterest).
+type PointOfInterest struct {
+	Entry    uint32  // `entry`
+	X        float32 // `x`
+	Y        float32 // `y`
+	Icon     uint32  // `icon`
+	Flags    uint32  // `flags`
+	Data     uint32  // `data`
+	IconName string  // `icon_name`
+}
+
+// ItemRequiredTarget is one `item_required_target` row.
+type ItemRequiredTarget struct {
+	Entry       uint32 // `entry` (item id)
+	Type        uint32 // `type`
+	TargetEntry uint32 // `targetEntry`
+}
+
+// ReputationSpilloverTemplate is one `reputation_spillover_template` row.
+type ReputationSpilloverTemplate struct {
+	Faction uint32 // `faction`
+	// Four (faction, rate, rank) triples.
+	SpilloverFaction [4]uint32  // `faction1`..`faction4`
+	Rate             [4]float32 // `rate_1`..`rate_4`
+	Rank             [4]uint32  // `rank_1`..`rank_4`
+}
+
+// ReputationRewardRate is one `reputation_reward_rate` row.
+type ReputationRewardRate struct {
+	Faction      uint32  // `faction`
+	QuestRate    float32 // `quest_rate`
+	CreatureRate float32 // `creature_rate`
+	SpellRate    float32 // `spell_rate`
+}
+
+// MailLevelReward is one `mail_level_reward` row.
+type MailLevelReward struct {
+	Level          uint32 // `level`
+	RaceMask       uint32 // `raceMask`
+	MailTemplateID uint32 // `mailTemplateId`
+	SenderEntry    uint32 // `senderEntry`
+}
+
+// SkillFishingBaseLevel is one `skill_fishing_base_level` row.
+type SkillFishingBaseLevel struct {
+	Entry uint32 // `entry` (area id)
+	Skill uint32 // `skill`
+}
+
+// PetCreateInfoSpell is one `petcreateinfo_spell` row (default pet spells).
+type PetCreateInfoSpell struct {
+	Entry  uint32    // `entry` (creature entry)
+	Spells [4]uint32 // `Spell1`..`Spell4`
+}
+
+// PetLevelStats is one `pet_levelstats` row.
+type PetLevelStats struct {
+	CreatureEntry uint32 // `creature_entry`
+	Level         uint32 // `level`
+	HP            uint32 // `hp`
+	Mana          uint32 // `mana`
+	Armor         uint32 // `armor`
+	Str           uint32 // `str`
+	Agi           uint32 // `agi`
+	Sta           uint32 // `sta`
+	Inte          uint32 // `inte`
+	Spi           uint32 // `spi`
+}

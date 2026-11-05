@@ -144,7 +144,31 @@ type Dataset struct {
 	PlayerClassLevelStats   map[ClassLevelKey]PlayerClassLevelStats
 	PlayerXPForLevel        map[uint32]uint32
 	ReservedNames           map[string]struct{}
+
+	// sConditionStorage — conditions keyed by condition_entry.
+	Conditions map[uint32]PlayerCondition
+	// mGameTeleMap — game_tele keyed by id.
+	GameTeles map[uint32]GameTele
+	// mPointsOfInterest — points_of_interest keyed by entry.
+	PointsOfInterest map[uint32]PointOfInterest
+	// mItemRequiredTarget — item_required_target rows.
+	ItemRequiredTargets []ItemRequiredTarget
+	// mRepSpilloverTemplate — reputation_spillover_template keyed by faction.
+	ReputationSpilloverTemplates map[uint32]ReputationSpilloverTemplate
+	// mRepRewardRate — reputation_reward_rate keyed by faction.
+	ReputationRewardRates map[uint32]ReputationRewardRate
+	// mMailLevelRewards — mail_level_reward rows.
+	MailLevelRewards []MailLevelReward
+	// mFishingBaseSkillLevel — skill_fishing_base_level keyed by area.
+	FishingBaseSkillLevels map[uint32]uint32
+	// mPetCreateSpells — petcreateinfo_spell keyed by creature entry.
+	PetCreateSpells map[uint32]PetCreateInfoSpell
+	// mPetLevelStats — pet_levelstats keyed by (creature, level).
+	PetLevelStats map[PetLevelStatsKey]PetLevelStats
 }
+
+// PetLevelStatsKey indexes pet_levelstats rows.
+type PetLevelStatsKey struct{ Entry, Level uint32 }
 
 // NewDataset allocates every collection. Loaders assume the maps are
 // non-nil; appending to a nil map panics.
@@ -193,5 +217,13 @@ func NewDataset() *Dataset {
 	d.PlayerClassLevelStats = make(map[ClassLevelKey]PlayerClassLevelStats)
 	d.PlayerXPForLevel = make(map[uint32]uint32)
 	d.ReservedNames = make(map[string]struct{})
+	d.Conditions = make(map[uint32]PlayerCondition)
+	d.GameTeles = make(map[uint32]GameTele)
+	d.PointsOfInterest = make(map[uint32]PointOfInterest)
+	d.ReputationSpilloverTemplates = make(map[uint32]ReputationSpilloverTemplate)
+	d.ReputationRewardRates = make(map[uint32]ReputationRewardRate)
+	d.FishingBaseSkillLevels = make(map[uint32]uint32)
+	d.PetCreateSpells = make(map[uint32]PetCreateInfoSpell)
+	d.PetLevelStats = make(map[PetLevelStatsKey]PetLevelStats)
 	return d
 }
