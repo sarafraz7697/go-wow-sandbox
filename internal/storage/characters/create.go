@@ -204,7 +204,7 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	cache := make([]uint32, 38)
 	for _, item := range p.Items {
 		if item.Slot < 19 {
-			cache[int(item.Slot)*2] = item.Template.ID
+			cache[int(item.Slot)*2] = item.Template.ItemID
 		}
 	}
 	// Preserve the first SQL error and stop executing subsequent writes.
@@ -266,7 +266,7 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	for i, item := range p.Items {
 		id := uint32(itemNext + uint64(i))
 		rows = append(rows, []any{id, guid, mangosone8606.EncodeItem(id, guid, item)})
-		inventory = append(inventory, []any{guid, item.Slot, id, item.Template.ID})
+		inventory = append(inventory, []any{guid, item.Slot, id, item.Template.ItemID})
 	}
 	batch("INSERT INTO item_instance (guid,owner_guid,data,text) VALUES ", "(?,?,?,'')", rows)
 	batch("INSERT INTO character_inventory (guid,bag,slot,item,item_template) VALUES ", "(?,0,?,?,?)", inventory)

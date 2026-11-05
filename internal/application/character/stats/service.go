@@ -73,31 +73,31 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 		if item.Fields[59] > 0 && item.Fields[58] == 0 {
 			continue
 		}
-		template, ok := data.Item(item.Entry)
-		details, detailsOK := data.ItemDetails(item.Entry)
-		if !ok || !detailsOK {
+		details, ok := data.ItemPrototype(item.Entry)
+		if !ok {
 			return nil, fmt.Errorf("missing equipped item template %d", item.Entry)
 		}
-		for _, stat := range details.Stats {
-			addStat(stat.Type, stat.Value)
+		for _, stat := range details.ItemStat {
+			addStat(stat.ItemType, stat.Value)
 		}
-		for i, value := range details.Resistances {
+		for i, value := range details.ResistanceValues() {
 			s.Resistances[i] += value
 		}
+
 		if details.ArmorDamageModifier > 0 {
 			s.Resistances[0] += uint32(details.ArmorDamageModifier)
 		}
 		s.ShieldBlock += details.Block
-		if item.Slot >= 15 && item.Slot <= 17 && template.Class == 2 {
+		if item.Slot >= 15 && item.Slot <= 17 && details.Class == 2 {
 			i := int(item.Slot) - 15
 			weapon[i] = true
-			weaponMin[i], weaponMax[i] = details.Damage[0].Min, details.Damage[0].Max
+			weaponMin[i], weaponMax[i] = details.Damage[0].DamageMin, details.Damage[0].DamageMax
 			if details.Delay > 0 {
 				s.AttackTime[i] = details.Delay
 			}
 		}
 		for _, spell := range details.Spells {
-			if spell.ID != 0 && spell.Trigger == 1 {
+			if spell.SpellID != 0 && spell.SpellTrigger == 1 {
 				limit("item equip spell auras")
 			}
 		}

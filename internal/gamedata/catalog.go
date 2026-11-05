@@ -5,24 +5,22 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"wowserver/internal/entity"
 )
 
-// New validates and atomically constructs a snapshot. This implementation
-// rejects incomplete data instead of silently inventing later-level stats.
-func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
-	c := &Catalog{races: map[uint32]Race{}, classes: map[uint32]Class{}, maps: map[uint32]Map{}, pairs: map[Pair]bool{}, starts: map[Pair]Start{}, outfits: map[outfitKey]Outfit{}, items: map[uint32]Item{}, spells: map[uint32]bool{}, startItems: map[Pair][]StartItem{}, startSpells: map[Pair][]uint32{}, actions: map[Pair][]Action{}, levels: map[levelKey]Level{}, classLevels: map[classLevelKey]ClassLevel{}, xp: map[uint32]uint32{}, reserved: map[string]bool{}, taverns: map[uint32]TavernTrigger{}}
+// New validates and atomically constructs a snapshot from the client DBC
+// data plus the world entities loaded into the dataset. This
+// implementation rejects incomplete data instead of silently inventing
+// later-level stats.
+func New(client ClientData, db *entity.Dataset, maxLevel uint32) (*Catalog, error) {
+	c := &Catalog{races: map[uint32]Race{}, classes: map[uint32]Class{}, maps: map[uint32]Map{}, pairs: map[Pair]bool{}, starts: map[Pair]Start{}, outfits: map[outfitKey]Outfit{}, spells: map[uint32]bool{}, startItems: map[Pair][]StartItem{}, startSpells: map[Pair][]uint32{}, actions: map[Pair][]Action{}, levels: map[levelKey]Level{}, classLevels: map[classLevelKey]ClassLevel{}, xp: map[uint32]uint32{}, reserved: map[string]bool{}, taverns: map[uint32]TavernTrigger{}}
 	if maxLevel < 1 || maxLevel > 255 {
 		return nil, fmt.Errorf("invalid max level")
 	}
-	c.itemDetails = make(map[uint32]ItemDetails, len(db.ItemDetails))
 	c.cooldowns = make(map[uint32]SpellCooldown, len(client.Cooldowns))
 	for _, v := range client.Cooldowns {
 		c.cooldowns[v.ID] = v
-	}
-	for _, v := range db.ItemDetails {
-		if v.ID != 0 {
-			c.itemDetails[v.ID] = v
-		}
 	}
 	c.factionIndices = make(map[uint32]int32, len(client.Factions))
 	for _, v := range client.Factions {
@@ -30,10 +28,17 @@ func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
 			c.factionIndices[v.ID] = v.Index
 		}
 	}
+	c.enchantments = make(map[uint32]Enchantment, len(client.Enchantments))
+	for _, v := range client.Enchantments {
+		if _, ok := c.enchantments[v.ID]; ok {
+			return nil, fmt.Errorf("duplicate enchantment %d", v.ID)
+		}
+		c.enchantments[v.ID] = v
+	}
 	if err := c.loadClient(client); err != nil {
 		return nil, err
 	}
-	if err := c.loadVisuals(client, db); err != nil {
+	if err := c.loadWorldEntities(db); err != nil {
 		return nil, err
 	}
 	if err := c.loadCreation(client, db); err != nil {
@@ -45,11 +50,10 @@ func New(client ClientData, db Rows, maxLevel uint32) (*Catalog, error) {
 	if err := c.loadTaverns(db, client); err != nil {
 		return nil, err
 	}
-	c.loadSpawns(db)
 	if err := c.validateCompleteness(db, maxLevel); err != nil {
 		return nil, err
 	}
-	c.summary = Summary{len(c.races), len(c.classes), len(c.maps), len(c.starts), len(c.outfits), len(c.spells), len(c.items), len(db.StartItems), len(db.Spells), len(db.Actions), len(c.levels), len(c.classLevels), len(c.xp), len(c.reserved), c.skippedZeroItems, len(c.taverns)}
+	c.summary = Summary{len(c.races), len(c.classes), len(c.maps), len(c.starts), len(c.outfits), len(c.spells), len(c.itemPrototypes), len(db.PlayerCreateInfoItems), len(db.PlayerCreateInfoSpells), len(db.PlayerCreateInfoActions), len(c.levels), len(c.classLevels), len(c.xp), len(c.reserved), c.skippedZeroItems, len(c.taverns), len(c.creatureTemplates), len(c.goTemplates), len(c.quests)}
 	return c, nil
 }
 
@@ -89,42 +93,44 @@ func (c *Catalog) loadClient(client ClientData) error {
 	return nil
 }
 
-func (c *Catalog) loadCreation(client ClientData, db Rows) error {
-	for _, v := range db.Items {
-		// Entry zero is not a usable item identifier. The reference validates
-		// item prototypes starting at 1; do not fail the entire startup on it.
-		if v.ID == 0 {
+func (c *Catalog) loadCreation(client ClientData, db *entity.Dataset) error {
+	for _, v := range db.ItemPrototypes {
+		// Entry zero is not a usable item identifier. The reference
+		// validates item prototypes starting at 1; do not fail the
+		// entire startup on it.
+		if v.ItemID == 0 {
 			c.skippedZeroItems++
 			continue
 		}
-		if _, ok := c.items[v.ID]; ok || v.InventoryType > 28 {
-			return fmt.Errorf("invalid item_template entry %d", v.ID)
+		if _, ok := c.itemPrototypes[v.ItemID]; ok || v.InventoryType > 28 {
+			return fmt.Errorf("invalid item_template entry %d", v.ItemID)
 		}
-		c.items[v.ID] = v
+		c.itemPrototypes[v.ItemID] = v
 	}
 	// Reference keeps the database inventory type but corrects known display IDs.
 	for _, v := range client.Items {
-		if item, ok := c.items[v.ID]; ok {
-			item.Display = v.Display
-			c.items[v.ID] = item
+		if item, ok := c.itemPrototypes[v.ID]; ok {
+			item.DisplayInfoID = v.Display
+			c.itemPrototypes[v.ID] = item
 		}
 	}
-	for _, v := range db.Starts {
+	for key, v := range db.PlayerCreateInfos {
+		pair := Pair{key.Race, key.Class}
 		m, ok := c.maps[v.Map]
-		if !c.pairs[v.Pair] || !ok || m.Type != 0 {
-			return fmt.Errorf("invalid playercreateinfo race=%d class=%d map=%d", v.Race, v.Class, v.Map)
+		if !c.pairs[pair] || !ok || m.Type != 0 {
+			return fmt.Errorf("invalid playercreateinfo race=%d class=%d map=%d", pair.Race, pair.Class, v.Map)
 		}
-		for _, n := range []float32{v.X, v.Y, v.Z, v.Orientation} {
+		for _, n := range []float32{v.PositionX, v.PositionY, v.PositionZ, v.Orientation} {
 			if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
-				return fmt.Errorf("non-finite start coordinates for %v", v.Pair)
+				return fmt.Errorf("non-finite start coordinates for %v", pair)
 			}
 		}
-		if _, ok = c.starts[v.Pair]; ok {
-			return fmt.Errorf("duplicate start %v", v.Pair)
+		if _, ok = c.starts[pair]; ok {
+			return fmt.Errorf("duplicate start %v", pair)
 		}
-		c.starts[v.Pair] = v
+		c.starts[pair] = Start{Pair: pair, Map: v.Map, Zone: v.Zone, X: v.PositionX, Y: v.PositionY, Z: v.PositionZ, Orientation: v.Orientation}
 	}
-	if len(c.starts) == 0 || len(c.items) == 0 {
+	if len(c.starts) == 0 || len(c.itemPrototypes) == 0 {
 		return fmt.Errorf("world database has no creation/item data; a schema-only dump is insufficient")
 	}
 	for _, v := range client.Outfits {
@@ -136,7 +142,7 @@ func (c *Catalog) loadCreation(client ClientData, db Rows) error {
 		}
 		for _, id := range v.Items {
 			if id > 0 {
-				if _, ok := c.items[uint32(id)]; !ok {
+				if _, ok := c.itemPrototypes[uint32(id)]; !ok {
 					return fmt.Errorf("outfit item %d missing in item_template", id)
 				}
 			}
@@ -147,52 +153,51 @@ func (c *Catalog) loadCreation(client ClientData, db Rows) error {
 		}
 		c.outfits[key] = v
 	}
-	for _, v := range db.StartItems {
-		if _, ok := c.starts[v.Pair]; !ok {
-			return fmt.Errorf("orphan start item %v", v.Pair)
+	for _, v := range db.PlayerCreateInfoItems {
+		pair := Pair{v.Race, v.Class}
+		if _, ok := c.starts[pair]; !ok {
+			return fmt.Errorf("orphan start item %v", pair)
 		}
-		if _, ok := c.items[v.Item]; !ok || v.Amount == 0 {
-			return fmt.Errorf("invalid starting item %d", v.Item)
+		if _, ok := c.itemPrototypes[v.ItemID]; !ok || v.Amount == 0 {
+			return fmt.Errorf("invalid starting item %d", v.ItemID)
 		}
-		c.startItems[v.Pair] = append(c.startItems[v.Pair], v)
+		c.startItems[pair] = append(c.startItems[pair], StartItem{Pair: pair, Item: v.ItemID, Amount: v.Amount})
 	}
-	for _, v := range db.Spells {
-		if _, ok := c.starts[v.Pair]; !ok || !c.spells[v.Spell] {
-			return fmt.Errorf("invalid start spell %d for %v", v.Spell, v.Pair)
+	for _, v := range db.PlayerCreateInfoSpells {
+		pair := Pair{v.Race, v.Class}
+		if _, ok := c.starts[pair]; !ok || !c.spells[v.Spell] {
+			return fmt.Errorf("invalid start spell %d for %v", v.Spell, pair)
 		}
-		c.startSpells[v.Pair] = append(c.startSpells[v.Pair], v.Spell)
+		c.startSpells[pair] = append(c.startSpells[pair], v.Spell)
 	}
-	for _, v := range db.Actions {
-		if _, ok := c.starts[v.Pair]; !ok || v.Button >= 132 || v.Action >= 0x1000000 {
+	for _, v := range db.PlayerCreateInfoActions {
+		pair := Pair{v.Race, v.Class}
+		if _, ok := c.starts[pair]; !ok || v.Button >= 132 || v.Action >= 0x1000000 {
 			return fmt.Errorf("invalid starting action %v", v)
 		}
 		if v.Type == 0 && !c.spells[v.Action] {
 			return fmt.Errorf("action spell %d missing", v.Action)
 		}
 		if v.Type == 128 {
-			if _, ok := c.items[v.Action]; !ok {
+			if _, ok := c.itemPrototypes[v.Action]; !ok {
 				return fmt.Errorf("action item %d missing", v.Action)
 			}
 		}
-		c.actions[v.Pair] = append(c.actions[v.Pair], v)
+		c.actions[pair] = append(c.actions[pair], Action{Pair: pair, Button: v.Button, Action: v.Action, Type: v.Type})
 	}
 	return nil
 }
 
-// loadTaverns joins Rows.TavernTriggerIDs (the world DB's areatrigger_tavern
-// table) against the AreaTrigger.dbc rows the client loader shipped. Only
+// loadTaverns joins the dataset's areatrigger_tavern rows (world DB)
+// against the AreaTrigger.dbc rows the client loader shipped. Only
 // triggers that exist in both are kept; a tavern id with no DBC row is
 // silently dropped to mirror the reference's "skip and log" behavior.
-func (c *Catalog) loadTaverns(db Rows, client ClientData) error {
-	if len(db.TavernTriggerIDs) == 0 {
+func (c *Catalog) loadTaverns(db *entity.Dataset, client ClientData) error {
+	if len(db.TavernTriggers) == 0 {
 		return nil
 	}
-	want := make(map[uint32]bool, len(db.TavernTriggerIDs))
-	for _, id := range db.TavernTriggerIDs {
-		want[id] = true
-	}
 	for _, t := range client.AreaTriggers {
-		if !want[t.ID] {
+		if _, want := db.TavernTriggers[t.ID]; !want {
 			continue
 		}
 		if _, dup := c.taverns[t.ID]; dup {
@@ -203,77 +208,52 @@ func (c *Catalog) loadTaverns(db Rows, client ClientData) error {
 	return nil
 }
 
-// loadSpawns copies creature and gameobject spawn data from the world DB
-// rows into the catalog. Spawns whose template entry is missing from the
-// catalog are silently skipped (the reference logs and continues).
-func (c *Catalog) loadSpawns(db Rows) {
-	c.creatureSpawns = make([]CreatureSpawn, 0, len(db.CreatureSpawns))
-	for _, s := range db.CreatureSpawns {
-		if s.GUID == 0 || s.Entry == 0 {
+func (c *Catalog) loadProgression(db *entity.Dataset, maxLevel uint32) error {
+	for key, v := range db.PlayerLevelStats {
+		pair := Pair{key.Race, key.Class}
+		if key.Level > maxLevel {
 			continue
 		}
-		if _, ok := c.creatureTemplates[s.Entry]; !ok {
-			continue
+		_, raceOK := c.races[key.Race]
+		_, classOK := c.classes[key.Class]
+		if key.Level == 0 || !raceOK || !classOK {
+			return fmt.Errorf("invalid level stats %v", pair)
 		}
-		c.creatureSpawns = append(c.creatureSpawns, s)
-	}
-	c.goSpawns = make([]GameObjectSpawn, 0, len(db.GameObjectSpawns))
-	for _, s := range db.GameObjectSpawns {
-		if s.GUID == 0 || s.Entry == 0 {
-			continue
-		}
-		if _, ok := c.goTemplates[s.Entry]; !ok {
-			continue
-		}
-		c.goSpawns = append(c.goSpawns, s)
-	}
-}
-
-func (c *Catalog) loadProgression(db Rows, maxLevel uint32) error {
-	for _, v := range db.Levels {
-		if v.Level > maxLevel {
-			continue
-		}
-		_, raceOK := c.races[v.Race]
-		_, classOK := c.classes[v.Class]
-		if v.Level == 0 || !raceOK || !classOK {
-			return fmt.Errorf("invalid level stats %v", v.Pair)
-		}
-		key := levelKey{v.Pair, v.Level}
-		if _, ok := c.levels[key]; ok {
+		lk := levelKey{pair, key.Level}
+		if _, ok := c.levels[lk]; ok {
 			return fmt.Errorf("duplicate level stats")
 		}
-		c.levels[key] = v
+		c.levels[lk] = Level{Pair: pair, Level: key.Level, Stats: [5]uint32{v.Str, v.Agi, v.Sta, v.Inte, v.Spi}}
 	}
-	for _, v := range db.ClassLevels {
-		if v.Level > maxLevel {
+	for key, v := range db.PlayerClassLevelStats {
+		if key.Level > maxLevel {
 			continue
 		}
-		if _, ok := c.classes[v.Class]; !ok || v.Level == 0 {
+		if _, ok := c.classes[key.Class]; !ok || key.Level == 0 {
 			return fmt.Errorf("invalid class stats")
 		}
-		key := classLevelKey{v.Class, v.Level}
-		if _, ok := c.classLevels[key]; ok {
+		ck := classLevelKey{key.Class, key.Level}
+		if _, ok := c.classLevels[ck]; ok {
 			return fmt.Errorf("duplicate class stats")
 		}
-		c.classLevels[key] = v
+		c.classLevels[ck] = ClassLevel{Class: key.Class, Level: key.Level, Health: v.BaseHP, Mana: v.BaseMana}
 	}
-	for _, v := range db.XP {
-		if v.Level == 0 || v.Level >= maxLevel {
+	for level, next := range db.PlayerXPForLevel {
+		if level == 0 || level >= maxLevel {
 			continue
 		}
-		if v.Next == 0 {
+		if next == 0 {
 			return fmt.Errorf("invalid XP row")
 		}
-		if _, ok := c.xp[v.Level]; ok {
+		if _, ok := c.xp[level]; ok {
 			return fmt.Errorf("duplicate XP level")
 		}
-		c.xp[v.Level] = v.Next
+		c.xp[level] = next
 	}
 	return nil
 }
 
-func (c *Catalog) validateCompleteness(db Rows, maxLevel uint32) error {
+func (c *Catalog) validateCompleteness(db *entity.Dataset, maxLevel uint32) error {
 	for pair := range c.starts {
 		if len(c.startSpells[pair]) == 0 {
 			return fmt.Errorf("missing starting spells for %v", pair)
@@ -304,11 +284,11 @@ func (c *Catalog) validateCompleteness(db Rows, maxLevel uint32) error {
 			}
 		}
 	}
-	for _, v := range db.Reserved {
-		if !utf8.ValidString(v) || v == "" {
+	for name := range db.ReservedNames {
+		if !utf8.ValidString(name) || name == "" {
 			return fmt.Errorf("invalid reserved_name")
 		}
-		c.reserved[strings.ToLower(v)] = true
+		c.reserved[strings.ToLower(name)] = true
 	}
 	return nil
 }

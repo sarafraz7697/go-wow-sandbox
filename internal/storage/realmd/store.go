@@ -6,11 +6,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	driver "github.com/go-sql-driver/mysql"
 	"strings"
-	"wowserver/internal/domain/account"
 	"wowserver/internal/auth/srp"
+	"wowserver/internal/domain/account"
 	"wowserver/internal/storage/sqlutil"
+
+	driver "github.com/go-sql-driver/mysql"
 )
 
 type Store struct{ DB *sql.DB }

@@ -5,14 +5,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	mysql "github.com/go-sql-driver/mysql"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	mysql "github.com/go-sql-driver/mysql"
+
 	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
+	"wowserver/internal/entity"
 	"wowserver/internal/gamedata"
 )
 
@@ -85,7 +88,7 @@ func TestCreationTransactions(t *testing.T) {
 		return a
 	}
 	plan := func(name string) character.Creation {
-		return character.Creation{Request: character.CreateRequest{Name: name, Race: 1, Class: 1}, Health: 60, Spells: []uint32{78}, Actions: []gamedata.Action{{Button: 0, Action: 78}}, Skills: []character.InitialSkill{{ID: 43, Value: 1, Max: 5}}, Reputations: []character.InitialReputation{{Faction: 72}}, Items: []character.InitialItem{{Template: gamedata.Item{ID: 25, MaxDurability: 20}, Slot: 15, Count: 1}}}
+		return character.Creation{Request: character.CreateRequest{Name: name, Race: 1, Class: 1}, Health: 60, Spells: []uint32{78}, Actions: []gamedata.Action{{Button: 0, Action: 78}}, Skills: []character.InitialSkill{{ID: 43, Value: 1, Max: 5}}, Reputations: []character.InitialReputation{{Faction: 72}}, Items: []character.InitialItem{{Template: entity.ItemPrototype{ItemID: 25, MaxDurability: 20}, Slot: 15, Count: 1}}}
 	}
 	count := func(q string, args ...any) int {
 		t.Helper()

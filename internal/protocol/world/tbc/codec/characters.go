@@ -73,7 +73,7 @@ func EncodeCharacter(c character.Summary, data *gamedata.Catalog) ([]byte, error
 	w.Uint32(petLevel)
 	w.Uint32(petFamily)
 	for slot := 0; slot < 19; slot++ {
-		item, ok := data.Item(cache[slot*2])
+		item, ok := data.ItemPrototype(cache[slot*2])
 		if !ok {
 			w.Uint32(0)
 			w.Uint8(0)
@@ -90,7 +90,7 @@ func EncodeCharacter(c character.Summary, data *gamedata.Catalog) ([]byte, error
 				}
 			}
 		}
-		w.Uint32(item.Display)
+		w.Uint32(item.DisplayInfoID)
 		w.Uint8(byte(item.InventoryType))
 		w.Uint32(visual)
 	}

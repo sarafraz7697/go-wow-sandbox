@@ -7,14 +7,24 @@ import (
 	"math"
 	"path/filepath"
 	"wowserver/internal/dbc"
+	"wowserver/internal/entity"
 	"wowserver/internal/gamedata"
 )
 
+// Store loads the world-database entities into the dataset. The
+// production implementation runs the worldload registry (SELECT-only);
+// progress receives a 0..100 percentage of the load plus a human step.
 type Store interface {
-	LoadStatic(context.Context) (gamedata.Rows, error)
+	LoadWorldEntities(ctx context.Context, dest *entity.Dataset, progress func(pct int, step string)) error
 }
 
 func Load(ctx context.Context, directory string, locale int, store Store) (*gamedata.Catalog, error) {
+	return LoadWithProgress(ctx, directory, locale, store, nil)
+}
+
+// LoadWithProgress is Load with a live progress callback for the
+// world-database phase (the DBC files load before it and are fast).
+func LoadWithProgress(ctx context.Context, directory string, locale int, store Store, progress func(pct int, step string)) (*gamedata.Catalog, error) {
 	if locale < 0 || locale >= 16 {
 		return nil, fmt.Errorf("DBC locale must be 0..15")
 	}
@@ -22,14 +32,14 @@ func Load(ctx context.Context, directory string, locale int, store Store) (*game
 	if err != nil {
 		return nil, err
 	}
-	rows, err := store.LoadStatic(ctx)
-	if err != nil {
+	dest := entity.NewDataset()
+	if err := store.LoadWorldEntities(ctx, dest, progress); err != nil {
 		return nil, err
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	return gamedata.New(client, rows, 70)
+	return gamedata.New(client, dest, 70)
 }
 
 type record struct {
@@ -163,7 +173,7 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 		return data, err
 	}
 	if err := load("Item", 4, 16, func(r *record) {
-		data.Items = append(data.Items, gamedata.Item{ID: r.u(0), Display: r.u(4), InventoryType: r.u(8)})
+		data.Items = append(data.Items, gamedata.ClientItem{ID: r.u(0), Display: r.u(4), InventoryType: r.u(8)})
 	}); err != nil {
 		return data, err
 	}

@@ -118,3 +118,10 @@ type ItemPrototype struct {
 func (p *ItemPrototype) GetMaxStackSize() uint32 {
 	return uint32(p.Stackable)
 }
+
+// ResistanceValues returns the item resistances in packet/stat order:
+// armor, holy, fire, nature, frost, shadow, arcane — the same order the
+// schema columns (armor, holy_res..arcane_res) and the client packet use.
+func (p *ItemPrototype) ResistanceValues() [7]uint32 {
+	return [7]uint32{p.Armor, p.HolyRes, p.FireRes, p.NatureRes, p.FrostRes, p.ShadowRes, p.ArcaneRes}
+}

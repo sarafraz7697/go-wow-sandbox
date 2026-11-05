@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"wowserver/internal/entity"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
@@ -53,7 +54,7 @@ func CreatureQuery(entry uint32, data *gamedata.Catalog) (world.Packet, error) {
 	w.Uint32(ci.Rank)
 	w.Uint32(0) // unknown wdbField11
 	w.Uint32(ci.PetSpellDataId)
-	for i := 0; i < gamedata.MAX_CREATURE_MODEL; i++ {
+	for i := 0; i < entity.MaxCreatureModels; i++ {
 		w.Uint32(ci.ModelId[i])
 	}
 	w.Float32(ci.HealthMultiplier)

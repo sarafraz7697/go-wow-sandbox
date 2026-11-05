@@ -3,6 +3,7 @@ package codec
 import (
 	"math"
 
+	"wowserver/internal/entity"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
@@ -33,48 +34,43 @@ func makeFullGUID(high, entry, counter uint32) uint64 {
 // CreateObjectForCreature builds an SMSG_UPDATE_OBJECT packet with a
 // UPDATETYPE_CREATE_OBJECT2 block for a creature visible to a player.
 //
-// Reference: Object::BuildCreateUpdateBlockForPlayer for TYPEID_UNIT (3).
+// Reference: Object::BuildCreateUpdateBlockForPlayer for TYPEID_UNIT (3),
+// fed by Creature::LoadFromDB + Creature::SelectLevel — the resolved
+// spawn carries the level/health/mana/model/scale/bounding/speed values
+// exactly as the reference computes them (gamedata.ResolveCreatureSpawn).
+//
 // updateFlags = LIVING(0x20) | HAS_POSITION(0x40) | HIGHGUID(0x10) = 0x70
 // (Unit::Unit). The UPDATEFLAG_HIGHGUID section for TYPEID_UNIT is the
 // default uint32(0) dword — 0x0000000B belongs to the LOWGUID section,
 // which is NOT part of flag set 0x70.
-//
-// MovementInfo for a creature: flags(0) extra(0) time x y z o fallTime(0)
-// + 8 speeds + HIGHGUID dword (0 for units).
-func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.CreatureTemplate, clock uint32) world.Packet {
+func CreateObjectForCreature(spawn gamedata.ResolvedCreatureSpawn, clock uint32) world.Packet {
 	fields := make([]uint32, f.UNIT_END)
 	guid := makeFullGUID(HighGUIDUnit, spawn.Entry, spawn.GUID)
 	fields[f.OBJECT_FIELD_GUID] = uint32(guid)
 	fields[f.OBJECT_FIELD_GUID+1] = uint32(guid >> 32)
 	fields[f.OBJECT_FIELD_TYPE] = 0x0009 // TYPE_MASK_UNIT = OBJECT | UNIT
-	fields[f.OBJECT_FIELD_SCALE_X] = math.Float32bits(1)
+	fields[f.OBJECT_FIELD_SCALE_X] = math.Float32bits(spawn.Scale)
 	// UNIT_FIELD_BYTES_0: race(0) | class(0) | gender(0) | powerType(0) — all 0 for creature
-	fields[f.UNIT_FIELD_LEVEL] = tmpl.MinLevel
-	fields[f.UNIT_FIELD_FACTIONTEMPLATE] = tmpl.FactionAlliance
-	fields[f.UNIT_FIELD_MAXHEALTH] = tmpl.MaxLevelHealth
-	health := spawn.Health
-	if health == 0 || health > tmpl.MaxLevelHealth {
-		health = tmpl.MaxLevelHealth
-	}
-	fields[f.UNIT_FIELD_HEALTH] = health
-	fields[f.UNIT_FIELD_MAXPOWER1] = tmpl.MaxLevelMana
+	fields[f.UNIT_FIELD_LEVEL] = spawn.Level
+	fields[f.UNIT_FIELD_FACTIONTEMPLATE] = spawn.Faction
+	fields[f.UNIT_FIELD_MAXHEALTH] = spawn.MaxHealth
+	fields[f.UNIT_FIELD_HEALTH] = spawn.Health
+	fields[f.UNIT_FIELD_MAXPOWER1] = spawn.MaxMana
 	fields[f.UNIT_FIELD_POWER1] = spawn.Mana
-	fields[f.UNIT_FIELD_FLAGS] = tmpl.UnitFlags
+	fields[f.UNIT_FIELD_FLAGS] = spawn.UnitFlags
 	fields[f.UNIT_FIELD_BYTES_1] = 0 // stand state 0 (stand)
 	fields[f.UNIT_FIELD_BYTES_2] = 0x2800
 	fields[f.UNIT_MOD_CAST_SPEED] = math.Float32bits(1)
-	fields[f.UNIT_FIELD_BOUNDINGRADIUS] = math.Float32bits(0.5)
-	fields[f.UNIT_FIELD_COMBATREACH] = math.Float32bits(1.5)
-	// Creatures use the first model from ModelId[MAX_CREATURE_MODEL]; the
-	// reference selects one in Creature::Create when modelid_override is set.
-	fields[f.UNIT_FIELD_DISPLAYID] = tmpl.ModelId[0]
-	fields[f.UNIT_FIELD_NATIVEDISPLAYID] = tmpl.ModelId[0]
+	fields[f.UNIT_FIELD_BOUNDINGRADIUS] = math.Float32bits(spawn.BoundingRadius)
+	fields[f.UNIT_FIELD_COMBATREACH] = math.Float32bits(spawn.CombatReach)
+	fields[f.UNIT_FIELD_DISPLAYID] = spawn.DisplayID
+	fields[f.UNIT_FIELD_NATIVEDISPLAYID] = spawn.DisplayID
 	fields[f.UNIT_FIELD_BASEATTACKTIME] = 2000
 	fields[f.UNIT_FIELD_BASEATTACKTIME+1] = 2000
 	// NPC flags (UNIT_NPC_FLAGS = 168) come straight from the template so the
 	// client shows gossip/vendor/quest markers (the reference sets them when
 	// loading the creature before the first values update).
-	fields[f.UNIT_NPC_FLAGS] = tmpl.NpcFlags
+	fields[f.UNIT_NPC_FLAGS] = spawn.NpcFlags
 
 	w := wire.NewWriter(MaxServerPayload)
 	w.Uint32(1) // block count: one object
@@ -92,8 +88,17 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 	w.Float32(spawn.Z)
 	w.Float32(spawn.Orientation)
 	w.Uint32(0) // fall time
-	// Speeds: walk, run, run_back, swim, swim_back, flight, flight_back, turn_rate
-	for _, speed := range []float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, math.Pi} {
+	// Speeds: walk, run, run_back, swim, swim_back, flight, flight_back,
+	// turn_rate — creature walk/run come from the template rates over the
+	// base movement speeds (UnitSpeed.cpp).
+	walk, run := spawn.SpeedWalk, spawn.SpeedRun
+	if walk <= 0 {
+		walk = 2.5
+	}
+	if run <= 0 {
+		run = 7
+	}
+	for _, speed := range []float32{walk, run, 4.5, 4.722222, 2.5, 7, 4.5, math.Pi} {
 		w.Float32(speed)
 	}
 	w.Uint32(0) // UPDATEFLAG_HIGHGUID section: TYPEID_UNIT uses the default 0 dword
@@ -120,11 +125,11 @@ func CreateObjectForCreature(spawn gamedata.CreatureSpawn, tmpl gamedata.Creatur
 //	uint8  maskBlockCount, mask, values
 //
 // GAMEOBJECT_STATE is a values field, NOT a create-block dword.
-func CreateObjectForGameObject(spawn gamedata.GameObjectSpawn, tmpl gamedata.GameObjectTemplate) world.Packet {
+func CreateObjectForGameObject(guid uint32, data gamedata.GameObjectSpawnRef, tmpl entity.GameObjectInfo) world.Packet {
 	fields := make([]uint32, f.GAMEOBJECT_END)
-	guid := makeFullGUID(HighGUIDGameObject, spawn.Entry, spawn.GUID)
-	fields[f.OBJECT_FIELD_GUID] = uint32(guid)
-	fields[f.OBJECT_FIELD_GUID+1] = uint32(guid >> 32)
+	fullGUID := makeFullGUID(HighGUIDGameObject, data.Data.ID, guid)
+	fields[f.OBJECT_FIELD_GUID] = uint32(fullGUID)
+	fields[f.OBJECT_FIELD_GUID+1] = uint32(fullGUID >> 32)
 	fields[f.OBJECT_FIELD_TYPE] = 0x0021 // TYPE_MASK_GAMEOBJECT = OBJECT | GAMEOBJECT
 	scale := tmpl.Size
 	if scale <= 0 {
@@ -134,19 +139,19 @@ func CreateObjectForGameObject(spawn gamedata.GameObjectSpawn, tmpl gamedata.Gam
 	fields[f.GAMEOBJECT_DISPLAYID] = tmpl.DisplayID
 	fields[f.GAMEOBJECT_FLAGS] = tmpl.Flags
 	// GAMEOBJECT_ROTATION: 4 floats (rotation0..3)
-	fields[f.GAMEOBJECT_ROTATION] = math.Float32bits(spawn.Rotation0)
-	fields[f.GAMEOBJECT_ROTATION+1] = math.Float32bits(spawn.Rotation1)
-	fields[f.GAMEOBJECT_ROTATION+2] = math.Float32bits(spawn.Rotation2)
-	fields[f.GAMEOBJECT_ROTATION+3] = math.Float32bits(spawn.Rotation3)
-	fields[f.GAMEOBJECT_STATE] = spawn.State
-	fields[f.GAMEOBJECT_POS_X] = math.Float32bits(spawn.X)
-	fields[f.GAMEOBJECT_POS_Y] = math.Float32bits(spawn.Y)
-	fields[f.GAMEOBJECT_POS_Z] = math.Float32bits(spawn.Z)
-	fields[f.GAMEOBJECT_FACING] = math.Float32bits(spawn.Orientation)
+	fields[f.GAMEOBJECT_ROTATION] = math.Float32bits(data.Data.Rotation0)
+	fields[f.GAMEOBJECT_ROTATION+1] = math.Float32bits(data.Data.Rotation1)
+	fields[f.GAMEOBJECT_ROTATION+2] = math.Float32bits(data.Data.Rotation2)
+	fields[f.GAMEOBJECT_ROTATION+3] = math.Float32bits(data.Data.Rotation3)
+	fields[f.GAMEOBJECT_STATE] = data.Data.State
+	fields[f.GAMEOBJECT_POS_X] = math.Float32bits(data.Data.PosX)
+	fields[f.GAMEOBJECT_POS_Y] = math.Float32bits(data.Data.PosY)
+	fields[f.GAMEOBJECT_POS_Z] = math.Float32bits(data.Data.PosZ)
+	fields[f.GAMEOBJECT_FACING] = math.Float32bits(data.Data.Orientation)
 	fields[f.GAMEOBJECT_FACTION] = tmpl.Faction
 	fields[f.GAMEOBJECT_TYPE_ID] = tmpl.Type
-	fields[f.GAMEOBJECT_ANIMPROGRESS] = spawn.AnimProgress
-	if spawn.AnimProgress == 0 {
+	fields[f.GAMEOBJECT_ANIMPROGRESS] = data.Data.AnimProgress
+	if data.Data.AnimProgress == 0 {
 		fields[f.GAMEOBJECT_ANIMPROGRESS] = 100
 	}
 
@@ -154,16 +159,16 @@ func CreateObjectForGameObject(spawn gamedata.GameObjectSpawn, tmpl gamedata.Gam
 	w.Uint32(1) // block count
 	w.Uint8(0)  // hasTransport
 	w.Uint8(3)  // UPDATETYPE_CREATE_OBJECT2
-	w.PackedGUID(guid)
+	w.PackedGUID(fullGUID)
 	w.Uint8(5)    // TYPEID_GAMEOBJECT
 	w.Uint8(0x58) // updateFlags: LOWGUID | HIGHGUID | HAS_POSITION
 	// Position for non-living objects: 4 floats
-	w.Float32(spawn.X)
-	w.Float32(spawn.Y)
-	w.Float32(spawn.Z)
-	w.Float32(spawn.Orientation)
+	w.Float32(data.Data.PosX)
+	w.Float32(data.Data.PosY)
+	w.Float32(data.Data.PosZ)
+	w.Float32(data.Data.Orientation)
 	// UPDATEFLAG_LOWGUID section: GetGUIDLow() for TYPEID_GAMEOBJECT
-	w.Uint32(spawn.GUID)
+	w.Uint32(guid)
 	// UPDATEFLAG_HIGHGUID section: GetGUIDHigh() for TYPEID_GAMEOBJECT
 	w.Uint32(HighGUIDGameObject)
 	writeValues(w, fields)

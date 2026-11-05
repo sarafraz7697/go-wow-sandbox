@@ -118,7 +118,7 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 	w.Uint32(uint32(1 + len(p.Items)))
 	w.Uint8(0)
 	for _, item := range p.Items {
-		details, ok := data.ItemDetails(item.Entry)
+		details, ok := data.ItemPrototype(item.Entry)
 		if !ok {
 			return world.Packet{}, character.ErrPlayerUnsupported
 		}
@@ -152,7 +152,7 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 			itemFields[f.ITEM_FIELD_CONTAINED], itemFields[f.ITEM_FIELD_CONTAINED+1] = p.GUID, 0
 		} else {
 			parent, exists := items[item.Bag]
-			parentDetails, valid := data.ItemDetails(parent.Entry)
+			parentDetails, valid := data.ItemPrototype(parent.Entry)
 			if !exists || !valid || parent.Bag != 0 || uint32(item.Slot) >= parentDetails.ContainerSlots {
 				return world.Packet{}, character.ErrPlayerUnsupported
 			}

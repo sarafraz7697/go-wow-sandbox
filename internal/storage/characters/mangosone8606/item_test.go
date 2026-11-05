@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 	"wowserver/internal/domain/character"
-	"wowserver/internal/gamedata"
+	"wowserver/internal/entity"
 )
 
 func TestNativeItemRecord(t *testing.T) {
-	v := strings.Fields(EncodeItem(7, 9, character.InitialItem{Template: gamedata.Item{ID: 25, Bonding: 2, MaxDurability: 20, Charges: [5]int32{-1}}, Slot: 15, Count: 1}))
+	v := strings.Fields(EncodeItem(7, 9, character.InitialItem{Template: entity.ItemPrototype{ItemID: 25, Bonding: 2, MaxDurability: 20, Spells: [5]entity.ItemSpell{{SpellCharges: -1}}}, Slot: 15, Count: 1}))
 	if len(v) != 60 {
 		t.Fatal(len(v))
 	}

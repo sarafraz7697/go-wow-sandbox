@@ -77,19 +77,43 @@ func (n *pf32) Scan(src any) error {
 	switch v := src.(type) {
 	case nil:
 		*n.p = 0
+
+	case float32:
+		*n.p = v
+
 	case float64:
 		*n.p = float32(v)
+
+	case int32:
+		*n.p = float32(v)
+
 	case int64:
 		*n.p = float32(v)
+
+	case uint32:
+		*n.p = float32(v)
+
+	case uint64:
+		*n.p = float32(v)
+
 	case []byte:
 		f, err := strconv.ParseFloat(string(v), 32)
 		if err != nil {
 			return err
 		}
 		*n.p = float32(f)
+
+	case string:
+		f, err := strconv.ParseFloat(v, 32)
+		if err != nil {
+			return err
+		}
+		*n.p = float32(f)
+
 	default:
 		return fmt.Errorf("float scan: unsupported type %T", src)
 	}
+
 	return nil
 }
 
@@ -97,18 +121,23 @@ func (n *pstr) Scan(src any) error {
 	switch v := src.(type) {
 	case nil:
 		*n.p = ""
+
 	case string:
 		*n.p = v
+
 	case []byte:
 		*n.p = string(v)
+
 	case time.Time:
 		// Drivers configured with parseTime (and the SQLite test driver)
 		// hand DATETIME columns back as time.Time; render them like the
 		// MySQL textual format the reference reads.
 		*n.p = v.Format("2006-01-02 15:04:05")
+
 	default:
 		return fmt.Errorf("string scan: unsupported type %T", src)
 	}
+
 	return nil
 }
 
@@ -161,22 +190,55 @@ func (n *nullBoolRaw) Scan(src any) error {
 	return nil
 }
 
-// toInt normalizes every numeric shape the MySQL driver produces
-// (int64, uint64, float64, []byte, string) into an int64.
+// toInt normalizes numeric shapes returned by SQL drivers
+// (signed/unsigned integers, floats, []byte, and string) into int64.
 func toInt(src any) (int64, error) {
 	switch v := src.(type) {
 	case nil:
 		return 0, nil
+
+	case int:
+		return int64(v), nil
+
+	case int8:
+		return int64(v), nil
+
+	case int16:
+		return int64(v), nil
+
+	case int32:
+		return int64(v), nil
+
 	case int64:
 		return v, nil
+
+	case uint:
+		return int64(v), nil
+
+	case uint8:
+		return int64(v), nil
+
+	case uint16:
+		return int64(v), nil
+
+	case uint32:
+		return int64(v), nil
+
 	case uint64:
 		return int64(v), nil
+
+	case float32:
+		return int64(v), nil
+
 	case float64:
 		return int64(v), nil
+
 	case []byte:
 		return strconv.ParseInt(string(v), 10, 64)
+
 	case string:
 		return strconv.ParseInt(v, 10, 64)
+
 	default:
 		return 0, fmt.Errorf("numeric scan: unsupported type %T", src)
 	}
@@ -190,4 +252,6 @@ var (
 	_ sql.Scanner = (*pstr)(nil)
 	_ sql.Scanner = (*pu8)(nil)
 	_ sql.Scanner = (*pbool)(nil)
+	_ sql.Scanner = (*nullI32Raw)(nil)
+	_ sql.Scanner = (*nullBoolRaw)(nil)
 )

@@ -28,7 +28,7 @@ type ability struct{ skill, spell, race, class, method uint32 }
 // masks must be stored and evaluated per character at Build time instead of
 // once at load time for a fixed Human/Warrior pair.
 type faction struct {
-	id                                   uint32
+	id                         uint32
 	raceMask, classMask, flags [4]uint32
 }
 
@@ -317,7 +317,7 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 	occupied := map[uint8]bool{}
 	backpack := uint8(23)
 	add := func(id, count uint32) error {
-		item, ok := p.data.Item(id)
+		item, ok := p.data.ItemPrototype(id)
 		if !ok || count == 0 || item.Stackable < 1 || item.Duration != 0 {
 			return fmt.Errorf("unsupported initial item %d", id)
 		}
@@ -359,16 +359,16 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 		if id <= 0 {
 			continue
 		}
-		item, ok := p.data.Item(uint32(id))
+		item, ok := p.data.ItemPrototype(uint32(id))
 		if !ok {
 			return out, fmt.Errorf("missing item %d", id)
 		}
 		count := item.BuyCount
-		if item.Class == 0 && item.Subclass == 5 {
-			if item.FoodCategory == 11 && item.Stackable > 4 {
+		if item.Class == 0 && item.SubClass == 5 {
+			if item.Spells[0].SpellCategory == 11 && item.Stackable > 4 {
 				count = 4
 			}
-			if item.FoodCategory == 59 && item.Stackable > 2 {
+			if item.Spells[0].SpellCategory == 59 && item.Stackable > 2 {
 				count = 2
 			}
 		}

@@ -4,28 +4,41 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"wowserver/internal/entity"
 )
 
-func creationFixture() (ClientData, Rows) {
+func creationFixture() (ClientData, *entity.Dataset) {
 	p := Pair{1, 1}
 	client := ClientData{Races: []Race{{ID: 1}}, Classes: []Class{{ID: 1}}, Maps: []Map{{ID: 0}}, Pairs: []Pair{p}, SpellIDs: []uint32{100}, Outfits: []Outfit{{Pair: p, Gender: 0, Items: [12]int32{25}}, {Pair: p, Gender: 1, Items: [12]int32{25}}}}
-	db := Rows{Starts: []Start{{Pair: p}}, Items: []Item{{ID: 25, Display: 123, InventoryType: 21}}, Spells: []StartSpell{{Pair: p, Spell: 100}}, StartItems: []StartItem{{Pair: p, Item: 25, Amount: 1}}, Actions: []Action{{Pair: p, Button: 0, Action: 100}}, Levels: []Level{{Pair: p, Level: 1, Stats: [5]uint32{20, 20, 20, 20, 20}}, {Pair: p, Level: 2, Stats: [5]uint32{21, 21, 21, 21, 21}}}, ClassLevels: []ClassLevel{{Class: 1, Level: 1, Health: 20}, {Class: 1, Level: 2, Health: 30}}, XP: []XP{{Level: 1, Next: 400}}, Reserved: []string{"Admin"}}
+	db := entity.NewDataset()
+	db.PlayerCreateInfos[entity.RaceClassKey{Race: 1, Class: 1}] = entity.PlayerCreateInfo{Map: 0}
+	db.ItemPrototypes[25] = entity.ItemPrototype{ItemID: 25, DisplayInfoID: 123, InventoryType: 21}
+	db.PlayerCreateInfoSpells = []entity.PlayerCreateInfoSpell{{Race: 1, Class: 1, Spell: 100}}
+	db.PlayerCreateInfoItems = []entity.PlayerCreateInfoItem{{Race: 1, Class: 1, ItemID: 25, Amount: 1}}
+	db.PlayerCreateInfoActions = []entity.PlayerCreateInfoAction{{Race: 1, Class: 1, Button: 0, Action: 100}}
+	db.PlayerLevelStats[entity.RaceClassLevelKey{Race: 1, Class: 1, Level: 1}] = entity.PlayerLevelStats{Level: 1, Str: 20, Agi: 20, Sta: 20, Inte: 20, Spi: 20}
+	db.PlayerLevelStats[entity.RaceClassLevelKey{Race: 1, Class: 1, Level: 2}] = entity.PlayerLevelStats{Level: 2, Str: 21, Agi: 21, Sta: 21, Inte: 21, Spi: 21}
+	db.PlayerClassLevelStats[entity.ClassLevelKey{Class: 1, Level: 1}] = entity.PlayerClassLevelStats{Class: 1, Level: 1, BaseHP: 20}
+	db.PlayerClassLevelStats[entity.ClassLevelKey{Class: 1, Level: 2}] = entity.PlayerClassLevelStats{Class: 1, Level: 2, BaseHP: 30}
+	db.PlayerXPForLevel[1] = 400
+	db.ReservedNames["Admin"] = struct{}{}
 	return client, db
 }
+
 func TestZeroItemDoesNotAbortStartup(t *testing.T) {
 	client, db := creationFixture()
-	db.Items = append(db.Items, Item{ID: 0, Display: 45479, InventoryType: 21})
+	db.ItemPrototypes[0] = entity.ItemPrototype{ItemID: 0, DisplayInfoID: 45479, InventoryType: 21}
 	c, e := New(client, db, 2)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, ok := c.Item(0); ok {
+	if _, ok := c.ItemPrototype(0); ok {
 		t.Fatal("zero exposed as usable item")
 	}
 	if c.Summary().SkippedZeroItems != 1 || c.Summary().Items != 1 {
 		t.Fatal("incorrect load counts")
 	}
-	db.StartItems[0].Item = 0
+	db.PlayerCreateInfoItems[0].ItemID = 0
 	if _, e := New(client, db, 2); e == nil {
 		t.Fatal("starting item reference to zero accepted")
 	}
@@ -36,7 +49,7 @@ func TestCatalogOwnershipAndNames(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	db.StartItems[0].Amount = 99
+	db.PlayerCreateInfoItems[0].Amount = 99
 	items := c.StartItems(1, 1)
 	items[0].Amount = 98
 	spells := c.StartSpells(1, 1)
@@ -63,22 +76,36 @@ func TestCatalogOwnershipAndNames(t *testing.T) {
 	}
 }
 func TestInvalidCreationData(t *testing.T) {
-	for name, change := range map[string]func(*ClientData, *Rows){
-		"missing stats":       func(_ *ClientData, d *Rows) { d.Levels = d.Levels[:1] },
-		"missing spell":       func(_ *ClientData, d *Rows) { d.Spells[0].Spell = 999 },
-		"invalid inventory":   func(_ *ClientData, d *Rows) { d.Items[0].InventoryType = 29 },
-		"duplicate item":      func(_ *ClientData, d *Rows) { d.Items = append(d.Items, d.Items[0]) },
-		"missing outfit item": func(c *ClientData, _ *Rows) { c.Outfits[0].Items[0] = 999 },
-		"instance start":      func(c *ClientData, _ *Rows) { c.Maps[0].Type = 1 },
-		"NaN":                 func(_ *ClientData, d *Rows) { d.Starts[0].X = float32(math.NaN()) },
-		"empty schema":        func(_ *ClientData, d *Rows) { *d = Rows{} },
+	for name, change := range map[string]func(*ClientData, *entity.Dataset){
+		"missing stats": func(_ *ClientData, d *entity.Dataset) {
+			delete(d.PlayerLevelStats, entity.RaceClassLevelKey{Race: 1, Class: 1, Level: 2})
+		},
+		"missing spell": func(_ *ClientData, d *entity.Dataset) { d.PlayerCreateInfoSpells[0].Spell = 999 },
+		"invalid inventory": func(_ *ClientData, d *entity.Dataset) {
+			it := d.ItemPrototypes[25]
+			it.InventoryType = 29
+			d.ItemPrototypes[25] = it
+		},
+		// "duplicate item" is no longer representable: the dataset
+		// keys prototypes by entry, so the loader-side duplicate
+		// check owns it.
+		"missing outfit item": func(c *ClientData, _ *entity.Dataset) { c.Outfits[0].Items[0] = 999 },
+		"instance start":      func(c *ClientData, _ *entity.Dataset) { c.Maps[0].Type = 1 },
+		"NaN": func(_ *ClientData, d *entity.Dataset) {
+			st := d.PlayerCreateInfos[entity.RaceClassKey{Race: 1, Class: 1}]
+			st.PositionX = float32(math.NaN())
+			d.PlayerCreateInfos[entity.RaceClassKey{Race: 1, Class: 1}] = st
+		},
+		"empty schema": func(_ *ClientData, d *entity.Dataset) { *d = *entity.NewDataset() },
 	} {
-		t.Run(name, func(t *testing.T) {
-			client, db := creationFixture()
-			change(&client, &db)
-			if _, e := New(client, db, 2); e == nil {
-				t.Fatal("invalid data accepted")
-			}
-		})
+		{
+			t.Run(name, func(t *testing.T) {
+				client, db := creationFixture()
+				change(&client, db)
+				if _, e := New(client, db, 2); e == nil {
+					t.Fatal("invalid data accepted")
+				}
+			})
+		}
 	}
 }
