@@ -132,9 +132,7 @@ func (h *Handler) refreshVisibility(s *Session) {
 		}
 	}
 	v.known = inRange
-	if created > 0 || destroyed > 0 {
-		s.log.Debug("visibility refreshed", "guid", s.player.GUID, "created", created, "destroyed", destroyed, "known", len(v.known))
-	}
+	_, _ = created, destroyed
 }
 
 // visibilityTick refreshes periodically so wandering creatures that cross the
