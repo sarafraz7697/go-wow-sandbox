@@ -261,43 +261,6 @@ func (h *Handler) registerInWorld(s *Session, p *character.Player) {
 	s.log.Debug("player spawned in world", "guid", p.GUID, "nearby_players", len(nearby))
 }
 
-// spawnNearbyObjects sends CREATE_OBJECT for all creatures and gameobjects
-// within the default visibility radius of the player's current position.
-// Called on world enter and when the player moves far enough to need a
-// visibility refresh.
-func (h *Handler) spawnNearbyObjects(s *Session) {
-	if s.player == nil || h.Data == nil {
-		return
-	}
-	const radius = 90.0 // DEFAULT_VISIBILITY_DISTANCE
-	clock := uint32(time.Now().UnixMilli())
-	// Creatures.
-	creatures := h.Data.CreatureSpawnsNear(s.player.Map, s.player.X, s.player.Y, s.player.Z, radius)
-	for _, cs := range creatures {
-		resolved, ok := h.Data.ResolveCreatureSpawn(cs)
-		if !ok {
-			continue
-		}
-		// Live position/facing: a wandering creature is not at its spawn point.
-		if lx, ly, lz, lo, moved := h.currentCreaturePosition(cs.GUID, time.Now()); moved {
-			resolved.X, resolved.Y, resolved.Z, resolved.Orientation = lx, ly, lz, lo
-		}
-		pkt := codec.CreateObjectForCreature(resolved, clock)
-		_ = s.send(pkt)
-	}
-	// Gameobjects.
-	gos := h.Data.GameObjectSpawnsNear(s.player.Map, s.player.X, s.player.Y, s.player.Z, radius)
-	for _, gs := range gos {
-		tmpl, ok := h.Data.ResolveGameObjectSpawn(gs)
-		if !ok {
-			continue
-		}
-		pkt := codec.CreateObjectForGameObject(gs.GUID, gs, tmpl)
-		_ = s.send(pkt)
-	}
-	s.log.Debug("spawned nearby objects", "guid", s.player.GUID, "creatures", len(creatures), "gameobjects", len(gos))
-}
-
 // sendLogoutStandState mirrors Unit::SetStandState: in addition to the
 // partial UPDATE_OBJECT that rewrites UNIT_FIELD_BYTES_1 byte 0, the
 // reference also sends the standalone SMSG_STANDSTATE_UPDATE packet.
@@ -335,6 +298,7 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 	now := time.Now()
 	// Creature random movement (MovementType 1) around this player.
 	h.tickCreatureMotion(s.player.Map, s.player.X, s.player.Y, now)
+	h.visibilityTick(s, now)
 	// Resting housekeeping: if the player is resting in a tavern, re-check
 	// their position against the trigger volume every tick. MaNGOS does this
 	// in UpdateAreaZoneAndOutdoors on zone change; we don't have zone-update
@@ -887,6 +851,9 @@ func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) 
 	if h.Broadcast != nil {
 		_ = h.Broadcast.UpdatePosition(s.player.GUID, s.player.Map, s.player.Zone, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
 	}
+	// Stream in the creatures/gameobjects of the area being entered and drop
+	// those left behind (Player::UpdateVisibilityOf).
+	h.maybeRefreshVisibility(s)
 	// Broadcast the movement to other visible players. MaNGOS builds a new
 	// packet with the mover's packed GUID prepended and calls
 	// SendMessageToSetExcept. We do the same: the payload is the client's

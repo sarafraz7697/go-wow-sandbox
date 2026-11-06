@@ -31,6 +31,9 @@ type Config struct {
 	SendQueue         int
 	// AllowTwoSideAccounts mirrors mangosd.conf AllowTwoSide.Accounts.
 	AllowTwoSideAccounts bool
+	// GameType mirrors mangosd.conf GameType (realm type used by
+	// World::IsPvPRealm). -1 = unset: the realmlist.icon value is used.
+	GameType int
 	DBCPath           string
 	DBCLocale         int
 	DataLoadTimeout   time.Duration
@@ -79,6 +82,7 @@ func Parse(args []string, output io.Writer) (Config, error) {
 func parse(args []string, output io.Writer, service, defaultPath, defaultListen string) (Config, error) {
 	var c Config
 	c.RealmID, c.SendQueue = 1, 64
+	c.GameType = -1
 	c.DBCPath, c.DataLoadTimeout = "dbc", 10*time.Minute
 	var path string
 	f := flag.NewFlagSet(service, flag.ContinueOnError)
@@ -218,6 +222,8 @@ func (c *Config) set(key, value string) error {
 		c.SendQueue, err = strconv.Atoi(value)
 	case "world.allow_two_side_accounts":
 		c.AllowTwoSideAccounts, err = strconv.ParseBool(value)
+	case "world.game_type":
+		c.GameType, err = strconv.Atoi(value)
 	case "network.listen":
 		c.Listen = value
 	case "network.max_connections":

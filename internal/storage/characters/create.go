@@ -164,8 +164,13 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE name=?)", p.Request.Name).Scan(&exists); err != nil {
 		return 0, err
 	}
-	facts := character.CreationFacts{RealmCount: count, OtherRealmsCount: other, NameTaken: exists, RealmIcon: icon, Privileged: gmlevel > 0}
-	if character.IsPvPRealmIcon(icon) && !s.policy.AllowTwoSideAccounts && !facts.Privileged {
+	realmType := icon
+	if s.policy.GameType >= 0 {
+		realmType = uint32(s.policy.GameType)
+	}
+	facts := character.CreationFacts{RealmCount: count, OtherRealmsCount: other, NameTaken: exists, RealmIcon: realmType, Privileged: gmlevel > 0}
+	slog.Info("character create: team rule inputs", "account", a.ID, "realm_type", realmType, "realmlist_icon", icon, "gmlevel", gmlevel, "allow_two_side", s.policy.AllowTwoSideAccounts, "race", p.Request.Race)
+	if character.IsPvPRealmIcon(realmType) && !s.policy.AllowTwoSideAccounts && !facts.Privileged {
 		// HandleCharCreateOpcode: "SELECT race FROM characters WHERE account=%u
 		// LIMIT 1" -- only the account's FIRST character decides, and the
 		// creation is a PVP_TEAMS_VIOLATION when its race is 0/unknown or its
@@ -179,6 +184,7 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 			newTeam := p.RaceTeams[uint32(p.Request.Race)]
 			oldTeam, known := p.RaceTeams[firstRace]
 			facts.HasOpposingFaction = firstRace == 0 || !known || oldTeam != newTeam
+			slog.Info("character create: team rule", "first_race", firstRace, "first_team", oldTeam, "new_team", newTeam, "opposing", facts.HasOpposingFaction)
 		}
 	}
 	if err = s.policy.Check(facts); err != nil {

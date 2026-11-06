@@ -177,6 +177,7 @@ func (c *Catalog) loadWorldEntities(db *entity.Dataset) error {
 		}
 		c.goSpawns = append(c.goSpawns, GameObjectSpawnRef{GUID: guid, Data: data})
 	}
+	c.buildSpatial()
 	return nil
 }
 

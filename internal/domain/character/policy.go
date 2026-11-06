@@ -21,10 +21,14 @@ type CreationPolicy struct {
 	// AllowTwoSideAccounts mirrors CONFIG_BOOL_ALLOW_TWO_SIDE_ACCOUNTS
 	// (AllowTwoSide.Accounts, default 0).
 	AllowTwoSideAccounts bool
+	// GameType mirrors mangosd.conf GameType (CONFIG_UINT32_GAME_TYPE), which
+	// is what World::IsPvPRealm reads. Negative = unset, the realmlist.icon
+	// value is used instead.
+	GameType int
 }
 
 func DefaultCreationPolicy() CreationPolicy {
-	return CreationPolicy{RealmLimit: 10, AccountLimit: 50}
+	return CreationPolicy{RealmLimit: 10, AccountLimit: 50, GameType: -1}
 }
 
 // IsPvPRealmIcon mirrors World::IsPvPRealm for the realmlist.icon value:

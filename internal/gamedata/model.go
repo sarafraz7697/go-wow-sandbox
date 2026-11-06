@@ -138,6 +138,7 @@ type Catalog struct {
 	classLevelStats   map[entity.CreatureClassLevelKey]entity.CreatureClassLvlStats
 	creatureSpawns    []CreatureSpawnRef
 	goSpawns          []GameObjectSpawnRef
+	spatial           *spatialIndex
 	skippedZeroItems  int
 	races             map[uint32]Race
 	classes           map[uint32]Class
@@ -219,6 +220,21 @@ func (c *Catalog) ClassIDs() []uint32 {
 func (c *Catalog) CreatureSpawnsNear(mapID uint32, x, y, z, radius float32) []CreatureSpawnRef {
 	radius2 := radius * radius
 	out := make([]CreatureSpawnRef, 0, 32)
+	if c.spatial != nil {
+		x0, x1, y0, y1 := cellRange(x, y, radius)
+		for cx := x0; cx <= x1; cx++ {
+			for cy := y0; cy <= y1; cy++ {
+				for _, i := range c.spatial.creatures[spatialKey{mapID, cx, cy}] {
+					s := c.creatureSpawns[i]
+					dx, dy, dz := s.Data.PosX-x, s.Data.PosY-y, s.Data.PosZ-z
+					if dx*dx+dy*dy+dz*dz <= radius2 {
+						out = append(out, s)
+					}
+				}
+			}
+		}
+		return out
+	}
 	for _, s := range c.creatureSpawns {
 		if s.Data.MapID != mapID {
 			continue
@@ -236,6 +252,21 @@ func (c *Catalog) CreatureSpawnsNear(mapID uint32, x, y, z, radius float32) []Cr
 func (c *Catalog) GameObjectSpawnsNear(mapID uint32, x, y, z, radius float32) []GameObjectSpawnRef {
 	radius2 := radius * radius
 	out := make([]GameObjectSpawnRef, 0, 32)
+	if c.spatial != nil {
+		x0, x1, y0, y1 := cellRange(x, y, radius)
+		for cx := x0; cx <= x1; cx++ {
+			for cy := y0; cy <= y1; cy++ {
+				for _, i := range c.spatial.objects[spatialKey{mapID, cx, cy}] {
+					s := c.goSpawns[i]
+					dx, dy, dz := s.Data.PosX-x, s.Data.PosY-y, s.Data.PosZ-z
+					if dx*dx+dy*dy+dz*dz <= radius2 {
+						out = append(out, s)
+					}
+				}
+			}
+		}
+		return out
+	}
 	for _, s := range c.goSpawns {
 		if s.Data.MapID != mapID {
 			continue

@@ -87,6 +87,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	}
 	creationPolicy := character.DefaultCreationPolicy()
 	creationPolicy.AllowTwoSideAccounts = c.AllowTwoSideAccounts
+	creationPolicy.GameType = c.GameType
 	creator, err := chars.NewCreator(creationCtx, c.CharacterDSN(), c.DSN(), c.RealmID, creationPolicy)
 	creationCancel()
 	if err != nil {

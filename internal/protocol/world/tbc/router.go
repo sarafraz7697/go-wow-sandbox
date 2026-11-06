@@ -32,6 +32,7 @@ type transition struct {
 // or mutate state directly. Handler.active remains a separate admission registry.
 type Session struct {
 	recentlyLoggedOut          bool
+	vis                        visibleSet // creatures/gameobjects the client knows (visibility.go)
 	unsupportedSeen            map[uint32]bool
 	player                     *character.Player
 	joined, logoutAt, nextSync time.Time

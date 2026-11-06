@@ -12,6 +12,10 @@ send_queue = 64
 # Mirrors AllowTwoSide.Accounts: allow Alliance and Horde characters on one
 # account on PvP realms (realmlist.icon 1, 8 or 16). Default false.
 allow_two_side_accounts = false
+# Mirrors mangosd.conf GameType (0 Normal, 1 PvP, 6 RP, 8 RP-PvP, 16 FFA-PvP).
+# World::IsPvPRealm reads THIS value in the reference. -1 (default) = use the
+# realmlist.icon of this realm instead.
+game_type = -1
 
 [database.login]
 host = 127.0.0.1
