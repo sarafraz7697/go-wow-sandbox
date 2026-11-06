@@ -21,6 +21,10 @@ type Enchantment struct {
 type Faction struct {
 	ID    uint32
 	Index int32
+	// RaceMask/ClassMask/Base are ReputationRaceMask[4], ReputationClassMask[4]
+	// and ReputationBase[4] of FactionEntry (FactionEntry::GetIndexFitTo).
+	RaceMask, ClassMask [4]uint32
+	Base                [4]int32
 }
 type SpellCooldown struct{ ID, Category, Recovery, CategoryRecovery uint32 }
 

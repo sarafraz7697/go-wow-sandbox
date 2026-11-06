@@ -40,6 +40,7 @@ type Handler struct {
 	OnAuthenticated             func(context.Context) error
 	mu                          sync.Mutex
 	active                      map[uint64]*activeConn
+	motion                      creatureMotion // runtime creature movement (creaturemotion.go)
 }
 
 // activeConn tracks one admitted account so a duplicate connection can

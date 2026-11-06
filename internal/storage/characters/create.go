@@ -129,12 +129,12 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	defer tx.Rollback()
 	mark("account_lock_and_session")
 	var key, builds string
-	var icon uint32
-	query := `SELECT COALESCE(a.sessionkey,''),r.realmbuilds,r.icon FROM ` + s.login + `account a JOIN ` + s.login + `realmlist r ON r.id=?
+	var icon, gmlevel uint32
+	query := `SELECT COALESCE(a.sessionkey,''),r.realmbuilds,r.icon,a.gmlevel FROM ` + s.login + `account a JOIN ` + s.login + `realmlist r ON r.id=?
  WHERE a.id=? AND (a.locked=0 OR a.last_ip=?) AND LEAST(a.gmlevel,3)>=LEAST(r.allowedSecurityLevel,3)
  AND NOT EXISTS(SELECT 1 FROM ` + s.login + `account_banned b WHERE b.id=a.id AND b.active=1 AND (b.unbandate=b.bandate OR b.unbandate>UNIX_TIMESTAMP()))
  AND NOT EXISTS(SELECT 1 FROM ` + s.login + `ip_banned b WHERE b.ip=? AND (b.unbandate=b.bandate OR b.unbandate>UNIX_TIMESTAMP())) FOR UPDATE`
-	if err = tx.QueryRowContext(ctx, query, s.realm, a.ID, ip, ip).Scan(&key, &builds, &icon); err != nil {
+	if err = tx.QueryRowContext(ctx, query, s.realm, a.ID, ip, ip).Scan(&key, &builds, &icon, &gmlevel); err != nil {
 		return 0, err
 	}
 	var expected [40]byte
@@ -164,22 +164,21 @@ func (s *Creator) Create(ctx context.Context, a account.WorldSession, ip string,
 	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE name=?)", p.Request.Name).Scan(&exists); err != nil {
 		return 0, err
 	}
-	facts := character.CreationFacts{RealmCount: count, OtherRealmsCount: other, NameTaken: exists, RealmIcon: icon}
-	{
-		// The reference rejects a PvP-realm creation when the account already
-		// has a character of the OPPOSING team (CharacterHandler.cpp compares
-		// TeamForRace of the new race against the existing characters), not
-		// "any Horde character exists". Compare teams instead of hardcoding
-		// one side.
-		opposing := "1,3,7,11" // Alliance races
-		if p.Team == 1 {
-			opposing = "2,5,6,8,10" // Horde races
-		}
-		if p.Team == 1 || p.Team == 7 {
-			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM characters WHERE account=? AND race IN ("+opposing+") AND (deleteDate IS NULL OR deleteDate=0))", a.ID).Scan(&exists); err != nil {
-				return 0, err
-			}
-			facts.HasOpposingFaction = exists
+	facts := character.CreationFacts{RealmCount: count, OtherRealmsCount: other, NameTaken: exists, RealmIcon: icon, Privileged: gmlevel > 0}
+	if character.IsPvPRealmIcon(icon) && !s.policy.AllowTwoSideAccounts && !facts.Privileged {
+		// HandleCharCreateOpcode: "SELECT race FROM characters WHERE account=%u
+		// LIMIT 1" -- only the account's FIRST character decides, and the
+		// creation is a PVP_TEAMS_VIOLATION when its race is 0/unknown or its
+		// Player::TeamForRace differs from the new race's team.
+		var firstRace uint32
+		switch e := tx.QueryRowContext(ctx, "SELECT race FROM characters WHERE account=? AND (deleteDate IS NULL OR deleteDate=0) ORDER BY guid LIMIT 1", a.ID).Scan(&firstRace); {
+		case e == sql.ErrNoRows:
+		case e != nil:
+			return 0, e
+		default:
+			newTeam := p.RaceTeams[uint32(p.Request.Race)]
+			oldTeam, known := p.RaceTeams[firstRace]
+			facts.HasOpposingFaction = firstRace == 0 || !known || oldTeam != newTeam
 		}
 	}
 	if err = s.policy.Check(facts); err != nil {

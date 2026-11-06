@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 
 	"wowserver/internal/entity"
 	"wowserver/internal/storage/sqlutil"
@@ -17,7 +16,9 @@ import (
 // ">> Loaded N ..." and outErrorDb console output.
 type Store struct {
 	DB  *sql.DB
-	Log *slog.Logger
+	Log worldload.Logger
+	// OnTable (optional) receives structured per-table loading events.
+	OnTable func(worldload.TableProgress)
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -50,6 +51,7 @@ func (s *Store) LoadWorldEntities(ctx context.Context, dest *entity.Dataset, pro
 	if progress != nil {
 		opts.Progress = progress
 	}
+	opts.OnTable = s.OnTable
 	report, err := worldload.Run(ctx, s.DB, dest, opts)
 	if err != nil {
 		return err

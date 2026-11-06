@@ -23,10 +23,16 @@ func New(client ClientData, db *entity.Dataset, maxLevel uint32) (*Catalog, erro
 		c.cooldowns[v.ID] = v
 	}
 	c.factionIndices = make(map[uint32]int32, len(client.Factions))
+	c.factions = make(map[uint32]Faction, len(client.Factions))
 	for _, v := range client.Factions {
+		c.factions[v.ID] = v
 		if v.Index >= 0 && v.Index < 128 {
 			c.factionIndices[v.ID] = v.Index
 		}
+	}
+	c.factionTemplates = make(map[uint32]FactionTemplate, len(client.FactionTemplates))
+	for _, v := range client.FactionTemplates {
+		c.factionTemplates[v.ID] = v
 	}
 	c.enchantments = make(map[uint32]Enchantment, len(client.Enchantments))
 	for _, v := range client.Enchantments {

@@ -9,6 +9,9 @@ request_timeout = 10s
 [world]
 realm_id = 1
 send_queue = 64
+# Mirrors AllowTwoSide.Accounts: allow Alliance and Horde characters on one
+# account on PvP realms (realmlist.icon 1, 8 or 16). Default false.
+allow_two_side_accounts = false
 
 [database.login]
 host = 127.0.0.1

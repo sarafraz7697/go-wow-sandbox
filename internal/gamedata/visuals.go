@@ -67,6 +67,18 @@ func (c *Catalog) loadWorldEntities(db *entity.Dataset) error {
 	c.creatureModels = make(map[uint32]entity.CreatureModelInfo, len(db.CreatureModelInfos))
 	c.classLevelStats = make(map[entity.CreatureClassLevelKey]entity.CreatureClassLvlStats, len(db.CreatureClassLvlStats))
 	c.itemPrototypes = make(map[uint32]entity.ItemPrototype, len(db.ItemPrototypes))
+	c.conditions = make(map[uint32]entity.PlayerCondition, len(db.Conditions))
+	for id, v := range db.Conditions {
+		c.conditions[id] = v
+	}
+	c.vendorItems = make(map[uint32][]entity.VendorItem, len(db.NpcVendors))
+	for entry, items := range db.NpcVendors {
+		c.vendorItems[entry] = append([]entity.VendorItem(nil), items...)
+	}
+	c.vendorTemplates = make(map[uint32][]entity.VendorItem, len(db.NpcVendorTemplates))
+	for id, items := range db.NpcVendorTemplates {
+		c.vendorTemplates[id] = append([]entity.VendorItem(nil), items...)
+	}
 
 	for id, v := range db.CreatureTemplates {
 		if id == 0 {
@@ -135,6 +147,10 @@ func (c *Catalog) loadWorldEntities(db *entity.Dataset) error {
 			continue
 		}
 		c.creatureSpawns = append(c.creatureSpawns, CreatureSpawnRef{GUID: guid, Data: data})
+	}
+	c.creatureByGUID = make(map[uint32]int, len(c.creatureSpawns))
+	for i, s := range c.creatureSpawns {
+		c.creatureByGUID[s.GUID] = i
 	}
 	c.goSpawns = make([]GameObjectSpawnRef, 0, len(db.GameObjects))
 	for _, guid := range db.GameObjectOrder {

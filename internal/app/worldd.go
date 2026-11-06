@@ -24,23 +24,24 @@ import (
 	worldstore "wowserver/internal/storage/world"
 	"wowserver/internal/transport"
 	worldsim "wowserver/internal/world"
+	"wowserver/internal/worldload"
 )
 
 func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) error {
-	log := logger(c.LogLevel, logOutput, c.LogColor)
+	log, console := loggerWithConsole(c.LogLevel, logOutput, c.LogColor)
 	// This composition root deliberately binds protocol, DBC and native persistence to 8606.
 	log.Info("worldd starting", "build", 8606, "persistence", "mangosone8606", "realm_id", c.RealmID, "log_level", c.LogLevel)
 
-	p := NewProgress(log, "worldd startup")
+	p := NewProgress(console, "worldd startup")
 
-	p.Step(5, "connecting to auth database")
+	p.Step(5, "Connecting to auth database")
 	db, err := store.Open(ctx, c.DSN())
 	if err != nil {
 		return err
 	}
 	defer db.DB.Close()
 
-	p.Step(10, "checking auth database schema")
+	p.Step(10, "Checking auth database schema")
 	checkCtx, end := context.WithTimeout(ctx, c.RequestTimeout)
 	err = db.Check(checkCtx)
 	if err == nil {
@@ -51,13 +52,13 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 		return err
 	}
 
-	p.Step(20, "loading static data (DBC + world DB)")
+	p.Step(20, "Loading static data (DBC + world DB)")
 	data, err := loadStatic(ctx, c, log, p)
 	if err != nil {
 		return err
 	}
 
-	p.Step(60, "connecting to character database")
+	p.Step(60, "Connecting to character database")
 	chars, err := characterstore.Open(ctx, c.CharacterDSN())
 	if err != nil {
 		return err
@@ -65,7 +66,7 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	defer chars.DB.Close()
 	chars.SetIdleTimeout(c.IdleTimeout)
 
-	p.Step(65, "checking character database schema")
+	p.Step(65, "Checking character database schema")
 	charCtx, charCancel := context.WithTimeout(ctx, c.RequestTimeout)
 	err = chars.CheckEnumeration(charCtx)
 	if err == nil {
@@ -77,26 +78,28 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	}
 	log.Info("character database connected", "realm_id", c.RealmID)
 
-	p.Step(70, "loading character creation profile (DBC)")
+	p.Step(70, "Loading character creation profile (DBC)")
 	creationCtx, creationCancel := context.WithTimeout(ctx, c.DataLoadTimeout)
 	profile, err := creationTBC.Load(creationCtx, c.DBCPath, data)
 	if err != nil {
 		creationCancel()
 		return fmt.Errorf("creation data: %w", err)
 	}
-	creator, err := chars.NewCreator(creationCtx, c.CharacterDSN(), c.DSN(), c.RealmID, character.DefaultCreationPolicy())
+	creationPolicy := character.DefaultCreationPolicy()
+	creationPolicy.AllowTwoSideAccounts = c.AllowTwoSideAccounts
+	creator, err := chars.NewCreator(creationCtx, c.CharacterDSN(), c.DSN(), c.RealmID, creationPolicy)
 	creationCancel()
 	if err != nil {
 		return fmt.Errorf("creation storage: %w", err)
 	}
 
-	p.Step(85, "opening world listener")
+	p.Step(85, "Opening world listener")
 	ln, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return fmt.Errorf("world listen: %w", err)
 	}
 
-	p.Step(90, "initializing world simulation")
+	p.Step(90, "Initializing world simulation")
 	// The World is the per-realm simulation registry shared by all
 	// connections. It routes broadcast packets between in-world players.
 	sim := worldsim.New()
@@ -114,38 +117,43 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger, p *Progress) (*gamedata.Catalog, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.DataLoadTimeout)
 	defer cancel()
-	log.Info("loading static data", "dbc_path", c.DBCPath, "dbc_locale", c.DBCLocale)
+	// Table loading is shown by the console ("12% > Loading creature_template..."
+	// plus an in-place done/total counter); validation warnings are collected
+	// quietly and summarised afterwards so they never interleave with it.
+	warnings := &warningCollector{}
 	db, err := worldstore.Open(ctx, c.WorldDSN())
 	if err != nil {
 		return nil, err
 	}
 	defer db.DB.Close()
-	// Per-table completion lines and capped validation warnings go to the
-	// startup log — the counterpart of MaNGOS's ">> Loaded N ..." and
-	// outErrorDb output.
-	db.Log = log
-	// The world-database load runs through the worldload registry in
-	// MaNGOS order. Progress is reported live, row-weighted across every
-	// registered table (counted up front with SELECT COUNT(*)), and the
-	// 0..100 load percentage is mapped onto the 20..60 band of the
-	// overall startup so the console shows continuous movement instead
-	// of freezing between two coarse steps.
-	data, err := dataTBC.LoadWithProgress(ctx, c.DBCPath, c.DBCLocale, db, p.Band(20, 60))
+	db.Log = warnings
+	const bandFrom, bandTo = 20, 60 // share of the startup bar used by the world load
+	db.OnTable = func(tp worldload.TableProgress) {
+		pct := bandFrom + (bandTo-bandFrom)*tp.Overall/100
+		switch {
+		case tp.Finished:
+			p.ui.TableDone(tp.Done, tp.Total, tp.Skipped)
+		case tp.Done == 0:
+			p.ui.TableStart(pct, tp.Name)
+		default:
+			p.ui.TableTick(tp.Done, tp.Total)
+		}
+	}
+	data, err := dataTBC.LoadWithProgress(ctx, c.DBCPath, c.DBCLocale, db, nil)
 	if err != nil {
 		return nil, fmt.Errorf("static data: %w", err)
 	}
+	warnings.flush(log)
 	s := data.Summary()
 	if s.SkippedZeroItems > 0 {
 		log.Warn("ignored item_template entry zero", "rows", s.SkippedZeroItems)
 	}
-	log.Info("static data loaded",
+	log.Info("dbc data loaded",
 		"races", s.Races, "classes", s.Classes, "maps", s.Maps, "creation_pairs", s.Pairs,
-		"outfits", s.Outfits, "spells", s.Spells, "items", s.Items,
-		"start_items", s.StartItems, "start_spells", s.StartSpells, "actions", s.Actions,
-		"levels", s.Levels, "class_levels", s.ClassLevels, "xp_levels", s.XP,
-		"reserved_names", s.Reserved,
-		"creature_templates", s.CreatureTemplates, "go_templates", s.GameObjectTemplates,
-		"quests", s.Quests,
-		"creature_spawns", data.CreatureSpawnCount(), "go_spawns", data.GameObjectSpawnCount())
+		"outfits", s.Outfits, "spells", s.Spells, "levels", s.Levels, "class_levels", s.ClassLevels,
+		"xp_levels", s.XP)
+	log.Info("world data loaded",
+		"items", s.Items, "creature_templates", s.CreatureTemplates, "go_templates", s.GameObjectTemplates,
+		"quests", s.Quests, "creature_spawns", data.CreatureSpawnCount(), "go_spawns", data.GameObjectSpawnCount())
 	return data, nil
 }

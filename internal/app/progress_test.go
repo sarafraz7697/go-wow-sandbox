@@ -4,75 +4,83 @@ import (
 	"bytes"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
-func newTestProgress(t *testing.T) (*Progress, *bytes.Buffer) {
-	t.Helper()
+func TestProgressStepsAreClampedAndCompact(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return NewProgress(logger, "test"), &buf
+	p := NewProgress(newConsole(&buf, false), "test")
+	p.Step(-5, "Zero")
+	p.Step(5, "Connecting")
+	p.Step(500, "Big")
+	p.Done("ready")
+	want := "  0% > Zero...\n  5% > Connecting...\n100% > Big...\n100% > ready...\n"
+	if buf.String() != want {
+		t.Fatalf("got %q want %q", buf.String(), want)
+	}
 }
 
-// Band must map a 0..100 sub-progress onto [from,to] without going
-// backwards, without repeats, and clamped at both ends.
-func TestProgressBand(t *testing.T) {
-	p, buf := newTestProgress(t)
-	band := p.Band(20, 60)
-	for pct := 0; pct <= 100; pct += 5 {
-		band(pct, "step")
+func TestConsoleTableLinesOnTerminalAndPipe(t *testing.T) {
+	var pipe bytes.Buffer
+	c := newConsole(&pipe, false)
+	c.TableStart(21, "creature_template")
+	c.TableTick(1000, 20000) // ignored when not a terminal
+	c.TableDone(20000, 20000, 3)
+	want := " 21% > Loading creature_template...\n 20000/20000 (3 skipped)\n"
+	if pipe.String() != want {
+		t.Fatalf("pipe got %q want %q", pipe.String(), want)
 	}
-	out := buf.String()
-	// First mapped percent is 20 (0% of the load), last is 60 (100%).
-	if !strings.Contains(out, "pct=20") {
-		t.Fatalf("band must start at 20:\n%s", out)
+
+	var tty bytes.Buffer
+	c = newConsole(&tty, true)
+	c.TableStart(22, "gameobject_template")
+	c.TableTick(1000, 20000)
+	c.TableDone(20000, 20000, 0)
+	out := tty.String()
+	if !strings.Contains(out, "\r 1000/20000") || !strings.HasSuffix(out, "\r 20000/20000\n") {
+		t.Fatalf("terminal output wrong: %q", out)
 	}
-	if !strings.Contains(out, "pct=60") {
-		t.Fatalf("band must reach 60:\n%s", out)
+}
+
+// A log record must never be glued to an in-place counter line.
+func TestLogRecordClosesOpenCounterLine(t *testing.T) {
+	var tty bytes.Buffer
+	c := newConsole(&tty, true)
+	c.TableTick(5, 10)
+	_, _ = c.Write([]byte("x\n"))
+	if !strings.Contains(tty.String(), " 5/10\nx\n") {
+		t.Fatalf("got %q", tty.String())
 	}
-	if strings.Contains(out, "pct=19") || strings.Contains(out, "pct=61") || strings.Contains(out, "pct=0 ") {
-		t.Fatalf("band leaked outside [20,60]:\n%s", out)
+}
+
+func TestCompactHandlerFormat(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(&compactHandler{mu: &sync.Mutex{}, out: &buf, level: slog.LevelInfo})
+	log.With("realm", 1).Info("worldd listening", "address", "127.0.0.1:8085", "note", "two words", "took", 1500*time.Millisecond)
+	log.Debug("hidden")
+	line := buf.String()
+	if strings.Count(line, "\n") != 1 || strings.Contains(line, "hidden") {
+		t.Fatalf("unexpected output %q", line)
 	}
-	// Percentages must be strictly increasing in log order.
-	seen := map[int]bool{}
-	for _, field := range strings.Fields(out) {
-		if strings.HasPrefix(field, "pct=") {
-			v := 0
-			if _, err := fmtSscanf(field[4:], &v); err != nil {
-				t.Fatalf("bad pct field %q", field)
-			}
-			if seen[v] {
-				// repeats are swallowed only when the mapped value repeats;
-				// each distinct value may appear once.
-			}
-			seen[v] = true
+	if len(line) < 9 || line[2] != ':' || line[5] != ':' || line[8] != ' ' {
+		t.Fatalf("timestamp must be HH:MM:SS, got %q", line)
+	}
+	for _, part := range []string{" INF worldd listening", " realm=1", " address=127.0.0.1:8085", ` note="two words"`, " took=1.5s"} {
+		if !strings.Contains(line, part) {
+			t.Fatalf("missing %q in %q", part, line)
 		}
 	}
-	if len(seen) < 9 {
-		t.Fatalf("expected at least 9 distinct percentages, got %d:\n%s", len(seen), out)
+	if strings.Contains(line, "\x1b") || strings.Contains(line, "time=") || strings.Contains(line, "level=") {
+		t.Fatalf("plain output must not contain escapes or slog keys: %q", line)
 	}
 }
 
-// Band must clamp degenerate ranges instead of dividing by zero.
-func TestProgressBandDegenerate(t *testing.T) {
-	p, _ := newTestProgress(t)
-	band := p.Band(60, 60)
-	band(0, "a")
-	band(50, "b")
-	band(100, "c")
-	// Out-of-range inputs clamp.
-	band(-5, "neg")
-	band(500, "big")
-}
-
-func fmtSscanf(s string, v *int) (int, error) {
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			break
-		}
-		n = n*10 + int(s[i]-'0')
+func TestLoggerColorNeverIsPlain(t *testing.T) {
+	var buf bytes.Buffer
+	logger("info", &buf, "never").Warn("careful")
+	if strings.Contains(buf.String(), "\x1b") || !strings.Contains(buf.String(), " WRN careful") {
+		t.Fatalf("got %q", buf.String())
 	}
-	*v = n
-	return 1, nil
 }

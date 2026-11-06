@@ -278,6 +278,10 @@ func (h *Handler) spawnNearbyObjects(s *Session) {
 		if !ok {
 			continue
 		}
+		// Live position/facing: a wandering creature is not at its spawn point.
+		if lx, ly, lz, lo, moved := h.currentCreaturePosition(cs.GUID, time.Now()); moved {
+			resolved.X, resolved.Y, resolved.Z, resolved.Orientation = lx, ly, lz, lo
+		}
 		pkt := codec.CreateObjectForCreature(resolved, clock)
 		_ = s.send(pkt)
 	}
@@ -329,6 +333,8 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 		return nil
 	}
 	now := time.Now()
+	// Creature random movement (MovementType 1) around this player.
+	h.tickCreatureMotion(s.player.Map, s.player.X, s.player.Y, now)
 	// Resting housekeeping: if the player is resting in a tavern, re-check
 	// their position against the trigger volume every tick. MaNGOS does this
 	// in UpdateAreaZoneAndOutdoors on zone change; we don't have zone-update
@@ -569,6 +575,7 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		result, e := codec.GameObjectQuery(entry, h.Data)
 		return &result, e
 	})
+	add(op.CMSG_LIST_INVENTORY, h.listInventory)
 	add(op.CMSG_SET_ACTIVE_MOVER, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
 		guid := r.Uint64()

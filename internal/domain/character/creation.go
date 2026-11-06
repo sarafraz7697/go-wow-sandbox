@@ -48,7 +48,11 @@ type Creation struct {
 	Energy uint32
 	// Team is the ChrRaces BaseLanguage value (7=Alliance, 1=Horde) used by
 	// the PvP-realm faction rule, mirroring Player::TeamForRace.
-	Team        uint32
+	Team uint32
+	// RaceTeams maps every known race to its team (ChrRaces.BaseLanguage:
+	// 7 Alliance, 1 Horde) so storage can apply Player::TeamForRace to the
+	// account's existing characters.
+	RaceTeams   map[uint32]uint32
 	Items       []InitialItem
 	Spells      []uint32
 	Actions     []gamedata.Action

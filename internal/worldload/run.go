@@ -49,6 +49,20 @@ type Logger interface {
 	Warn(msg string, args ...any)
 }
 
+// TableProgress is one structured loading event for the console display.
+type TableProgress struct {
+	Name string
+	// Overall is the row-weighted percentage (0..100) of the whole load at
+	// the time of the event.
+	Overall int
+	// Done and Total are the rows streamed so far and the table's row count.
+	Done, Total int64
+	// Finished marks the last event of a table; Rows/Skipped are the final
+	// kept/dropped counts then.
+	Finished      bool
+	Rows, Skipped int64
+}
+
 // RunOptions tunes Run.
 type RunOptions struct {
 	// Logger receives per-table completion lines and throttled live
@@ -61,6 +75,9 @@ type RunOptions struct {
 	// Called a few times per table per second at most, always from the
 	// goroutine calling Run.
 	Progress func(pct int, step string)
+	// OnTable receives structured per-table events: one at table start
+	// (Done 0), throttled ticks while rows stream, and one with Finished set.
+	OnTable func(TableProgress)
 	// MaxWarningsPerTable caps the per-row validation warnings logged per
 	// table, like a human-readable outErrorDb tail. Default 5.
 	MaxWarningsPerTable int
@@ -122,7 +139,7 @@ func Run(ctx context.Context, q Queryer, dest *Dataset, opts RunOptions) (*RunRe
 		var lastTick time.Time
 		var lastRows int
 		rowsDone := func(n int) {
-			if opts.Progress == nil || n == 0 {
+			if (opts.Progress == nil && opts.OnTable == nil) || n == 0 {
 				return
 			}
 			now := time.Now()
@@ -138,8 +155,16 @@ func Run(ctx context.Context, q Queryer, dest *Dataset, opts RunOptions) (*RunRe
 				}
 			}
 			overall := int(float64(cumulative+min64(int64(n), totals[i])) / float64(grandTotal) * 100)
-			step := fmt.Sprintf("%s %d%% (%d/%d rows)", l.Name, tablePct, n, totals[i])
-			opts.Progress(clamp(overall), step)
+			if opts.OnTable != nil {
+				opts.OnTable(TableProgress{Name: l.Name, Overall: clamp(overall), Done: int64(n), Total: totals[i]})
+			}
+			if opts.Progress != nil {
+				step := fmt.Sprintf("%s %d%% (%d/%d rows)", l.Name, tablePct, n, totals[i])
+				opts.Progress(clamp(overall), step)
+			}
+		}
+		if opts.OnTable != nil {
+			opts.OnTable(TableProgress{Name: l.Name, Overall: clamp(int(float64(cumulative) / float64(grandTotal) * 100)), Total: totals[i]})
 		}
 
 		tbl := &Table{
@@ -166,6 +191,9 @@ func Run(ctx context.Context, q Queryer, dest *Dataset, opts RunOptions) (*RunRe
 		tr.Skipped = int64(tbl.Skipped())
 		report.Tables = append(report.Tables, tr)
 		cumulative += totals[i]
+		if opts.OnTable != nil {
+			opts.OnTable(TableProgress{Name: l.Name, Overall: clamp(int(float64(cumulative) / float64(grandTotal) * 100)), Done: totals[i], Total: totals[i], Finished: true, Rows: tr.Rows, Skipped: tr.Skipped})
+		}
 		if opts.Logger != nil {
 			opts.Logger.Info("loaded entity", "table", l.Name, "rows", tr.Rows, "skipped", tr.Skipped, "took_ms", tr.TookMS)
 		}

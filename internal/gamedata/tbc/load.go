@@ -129,7 +129,25 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 		return data, err
 	}
 	if err := load("Faction", 53, 212, func(r *record) {
-		data.Factions = append(data.Factions, gamedata.Faction{ID: r.u(0), Index: int32(r.u(4))})
+		f := gamedata.Faction{ID: r.u(0), Index: int32(r.u(4))}
+		for i := 0; i < 4; i++ {
+			f.RaceMask[i] = r.u(8 + i*4)
+			f.ClassMask[i] = r.u(24 + i*4)
+			f.Base[i] = int32(r.u(40 + i*4))
+		}
+		data.Factions = append(data.Factions, f)
+	}); err != nil {
+		return data, err
+	}
+	// FactionTemplateEntryfmt "niiiiiiiiiiiii": id, faction, factionFlags,
+	// ourMask, friendlyMask, hostileMask, enemyFaction[4], friendFaction[4].
+	if err := load("FactionTemplate", 14, 56, func(r *record) {
+		t := gamedata.FactionTemplate{ID: r.u(0), Faction: r.u(4), Flags: r.u(8), OurMask: r.u(12), FriendlyMask: r.u(16), HostileMask: r.u(20)}
+		for i := 0; i < 4; i++ {
+			t.EnemyFaction[i] = r.u(24 + i*4)
+			t.FriendFaction[i] = r.u(40 + i*4)
+		}
+		data.FactionTemplates = append(data.FactionTemplates, t)
 	}); err != nil {
 		return data, err
 	}

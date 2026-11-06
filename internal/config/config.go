@@ -29,6 +29,8 @@ type Config struct {
 	WorldDatabase     Database
 	RealmID           uint32
 	SendQueue         int
+	// AllowTwoSideAccounts mirrors mangosd.conf AllowTwoSide.Accounts.
+	AllowTwoSideAccounts bool
 	DBCPath           string
 	DBCLocale         int
 	DataLoadTimeout   time.Duration
@@ -214,6 +216,8 @@ func (c *Config) set(key, value string) error {
 		c.RealmID = uint32(valueID)
 	case "world.send_queue":
 		c.SendQueue, err = strconv.Atoi(value)
+	case "world.allow_two_side_accounts":
+		c.AllowTwoSideAccounts, err = strconv.ParseBool(value)
 	case "network.listen":
 		c.Listen = value
 	case "network.max_connections":

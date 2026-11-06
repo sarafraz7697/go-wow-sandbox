@@ -91,6 +91,10 @@ func (c *Catalog) ResolveCreatureSpawn(ref CreatureSpawnRef) (ResolvedCreatureSp
 	if scale <= 0 {
 		scale = 1
 	}
+	// Unit::UpdateModelData: "we expect values in database to be relative to
+	// scale = 1.0", so both are multiplied by the object scale.
+	bounding *= scale
+	reach *= scale
 	// Base movement speeds from Unit.cpp baseMoveSpeed: walk 2.5, run 7.0.
 	const baseWalk, baseRun = 2.5, 7.0
 	walk := float32(baseWalk) * info.SpeedWalk

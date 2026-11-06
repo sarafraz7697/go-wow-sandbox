@@ -37,8 +37,11 @@ const (
 // The HIGHGUID lives in bits 48..63, so creatures are
 // 0xF130xxxxxxxxxxxx and gameobjects 0xF110xxxxxxxxxxxx — the client reads
 // the object type from the top 16 bits.
+// makeFullGUID mirrors ObjectGuid(HighGuid, entry, counter): for guids that
+// carry an entry the counter only owns the low 24 bits (ObjectGuid.h), the
+// entry sits at bits 24..47 and the high type at bits 48..63.
 func makeFullGUID(high, entry, counter uint32) uint64 {
-	return uint64(counter)&0xFFFFFFFF | uint64(entry&0xFFFFFF)<<24 | uint64(high)<<48
+	return uint64(counter&0xFFFFFF) | uint64(entry&0xFFFFFF)<<24 | uint64(high)<<48
 }
 
 // CreateObjectForCreature builds an SMSG_UPDATE_OBJECT packet with a

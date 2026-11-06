@@ -244,6 +244,10 @@ func (p *Profile) Build(r character.CreateRequest) (character.Creation, error) {
 		out.Energy = 100
 	}
 	out.Team = p.team(uint32(r.Race))
+	out.RaceTeams = make(map[uint32]uint32)
+	for _, id := range p.data.RaceIDs() {
+		out.RaceTeams[id] = p.team(id)
+	}
 	out.Spells = p.data.StartSpells(uint32(r.Race), uint32(r.Class))
 	out.Actions = p.data.Actions(uint32(r.Race), uint32(r.Class))
 	// Reputation flags follow ReputationMgr::Initialize: every faction with a

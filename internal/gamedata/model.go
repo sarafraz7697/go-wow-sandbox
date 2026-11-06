@@ -92,6 +92,8 @@ type Creature struct{ ID, Family uint32 }
 type ClientData struct {
 	Cooldowns    []SpellCooldown
 	Factions     []Faction
+	// FactionTemplates carries every row of FactionTemplate.dbc.
+	FactionTemplates []FactionTemplate
 	Enchantments []Enchantment
 	Items        []ClientItem
 	Races        []Race
@@ -121,6 +123,12 @@ type Catalog struct {
 	cooldowns         map[uint32]SpellCooldown
 	itemPrototypes    map[uint32]entity.ItemPrototype
 	factionIndices    map[uint32]int32
+	factions          map[uint32]Faction
+	factionTemplates  map[uint32]FactionTemplate
+	vendorItems       map[uint32][]entity.VendorItem
+	vendorTemplates   map[uint32][]entity.VendorItem
+	creatureByGUID    map[uint32]int
+	conditions        map[uint32]entity.PlayerCondition
 	enchantments      map[uint32]Enchantment
 	creatures         map[uint32]Creature
 	creatureTemplates map[uint32]entity.CreatureInfo
