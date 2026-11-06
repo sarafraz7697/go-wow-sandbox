@@ -28,6 +28,11 @@ type Player struct {
 	Skills                                       []InitialSkill
 	Reputations                                  []Reputation
 	Items                                        []PlayerItem
+	// InventoryDirty is set when the in-world inventory changed; the store
+	// then rewrites character_inventory/item_instance at release.
+	// RemovedItems lists item guids deleted during the session.
+	InventoryDirty bool
+	RemovedItems   []uint32
 	Entered                                      bool
 	// Resting mirrors PLAYER_FLAGS_RESTING (0x20). True while the player is
 	// inside an areatrigger_tavern volume; the logout handler uses it to take

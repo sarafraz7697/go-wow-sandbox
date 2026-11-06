@@ -8,6 +8,7 @@ import (
 	"time"
 	"wowserver/internal/domain/account"
 	"wowserver/internal/domain/character"
+	"wowserver/internal/domain/inventory"
 	"wowserver/internal/protocol/world"
 	"wowserver/internal/protocol/world/tbc/codec"
 	op "wowserver/internal/protocol/world/tbc/opcodes"
@@ -36,6 +37,9 @@ type Session struct {
 	unsupportedSeen            map[uint32]bool
 	player                     *character.Player
 	joined, logoutAt, nextSync time.Time
+	inv                        *inventory.Inventory // live inventory (inventory.go)
+	loadedItems                map[uint32]struct{}  // item guids present at login
+	allocatedItems             []uint32             // guids reserved during the session
 	syncCounter                uint32
 	syncPending                map[uint32]time.Time
 	send                       func(...world.Packet) error

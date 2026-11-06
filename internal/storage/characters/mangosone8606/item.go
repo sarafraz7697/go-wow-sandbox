@@ -40,3 +40,6 @@ func uints(values []uint32) string {
 	}
 	return b.String()
 }
+
+// EncodeFields renders a live item's 60 native words as item_instance.data.
+func EncodeFields(v [60]uint32) string { return uints(v[:]) }

@@ -138,6 +138,7 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 	if s.player.Entered && !s.joined.IsZero() {
 		seconds = uint32(time.Since(s.joined) / time.Second)
 	}
+	h.syncInventoryForSave(s)
 	if err := h.Players.ReleasePlayer(ctx, s.account.ID, s.player, seconds); err != nil {
 		return err
 	}
@@ -540,6 +541,12 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		return &result, e
 	})
 	add(op.CMSG_LIST_INVENTORY, h.listInventory)
+	add(op.CMSG_SWAP_INV_ITEM, h.swapInvItem)
+	add(op.CMSG_SWAP_ITEM, h.swapItem)
+	add(op.CMSG_AUTOEQUIP_ITEM, h.autoEquipItem)
+	add(op.CMSG_AUTOEQUIP_ITEM_SLOT, h.autoEquipItemSlot)
+	add(op.CMSG_SPLIT_ITEM, h.splitItem)
+	add(op.CMSG_DESTROYITEM, h.destroyItem)
 	add(op.CMSG_SET_ACTIVE_MOVER, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
 		guid := r.Uint64()

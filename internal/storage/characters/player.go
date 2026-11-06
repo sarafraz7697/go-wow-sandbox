@@ -206,6 +206,11 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 	if n != 1 {
 		return character.ErrPlayerUnavailable
 	}
+	if p.Entered && p.InventoryDirty {
+		if err = syncInventory(ctx, tx, p); err != nil {
+			return err
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO character_tutorial (account,tut0,tut1,tut2,tut3,tut4,tut5,tut6,tut7) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE tut0=VALUES(tut0),tut1=VALUES(tut1),tut2=VALUES(tut2),tut3=VALUES(tut3),tut4=VALUES(tut4),tut5=VALUES(tut5),tut6=VALUES(tut6),tut7=VALUES(tut7)`, accountID, p.Tutorials[0], p.Tutorials[1], p.Tutorials[2], p.Tutorials[3], p.Tutorials[4], p.Tutorials[5], p.Tutorials[6], p.Tutorials[7])
 	if err != nil {
 		return err

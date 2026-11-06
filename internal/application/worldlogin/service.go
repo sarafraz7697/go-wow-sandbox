@@ -45,6 +45,18 @@ func (s *Service) AcquirePlayer(ctx context.Context, accountID uint64, guid uint
 	return s.players.AcquirePlayer(ctx, accountID, guid)
 }
 
+// AllocateItemGUID reserves a fresh item guid for an item created in the
+// world (split stacks, vendor purchases, loot).
+func (s *Service) AllocateItemGUID(ctx context.Context, owner uint32) (uint32, error) {
+	a, ok := s.players.(interface {
+		AllocateItemGUID(context.Context, uint32) (uint32, error)
+	})
+	if !ok {
+		return 0, errors.New("item guid allocation not supported")
+	}
+	return a.AllocateItemGUID(ctx, owner)
+}
+
 // ReleasePlayer saves and releases the snapshot at logout or teardown.
 func (s *Service) ReleasePlayer(ctx context.Context, accountID uint64, p *character.Player, seconds uint32) error {
 	if s.players == nil {
