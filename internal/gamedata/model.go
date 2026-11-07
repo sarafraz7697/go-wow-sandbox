@@ -106,6 +106,10 @@ type ClientData struct {
 	// this against the dataset's areatrigger_tavern rows to keep only the
 	// inn/tavern volumes.
 	AreaTriggers []TavernTrigger
+	// RegenHP, RegenHPSpirit, RegenMPSpirit are the GameTables
+	// gtOCTRegenHP, gtRegenHPPerSpt and gtRegenMPPerSpt (one float per
+	// (class-1)*100+level-1). Nil when a table is not shipped.
+	RegenHP, RegenHPSpirit, RegenMPSpirit []float32
 }
 type Summary struct {
 	Races, Classes, Maps, Pairs, Outfits, Spells, Items, StartItems, StartSpells, Actions, Levels, ClassLevels, XP, Reserved, SkippedZeroItems, Taverns, CreatureTemplates, GameObjectTemplates, Quests int
@@ -120,6 +124,7 @@ type outfitKey struct {
 	Gender, ID uint8
 }
 type Catalog struct {
+	regenHP, regenHPSpirit, regenMPSpirit []float32
 	cooldowns         map[uint32]SpellCooldown
 	itemPrototypes    map[uint32]entity.ItemPrototype
 	factionIndices    map[uint32]int32
@@ -286,3 +291,22 @@ func (c *Catalog) CreatureTemplateCount() int   { return len(c.creatureTemplates
 func (c *Catalog) GameObjectTemplateCount() int { return len(c.goTemplates) }
 func (c *Catalog) CreatureSpawnCount() int      { return len(c.creatureSpawns) }
 func (c *Catalog) GameObjectSpawnCount() int    { return len(c.goSpawns) }
+
+// RegenRatios returns gtOCTRegenHP, gtRegenHPPerSpt and gtRegenMPPerSpt for a
+// class and level (GT_MAX_LEVEL = 100); a missing table or row yields 0.
+func (c *Catalog) RegenRatios(class, level uint32) (hpBase, hpSpirit, mpSpirit float32) {
+	if level > 100 {
+		level = 100
+	}
+	if class == 0 || level == 0 {
+		return
+	}
+	i := int((class-1)*100 + level - 1)
+	at := func(t []float32) float32 {
+		if i < len(t) {
+			return t[i]
+		}
+		return 0
+	}
+	return at(c.regenHP), at(c.regenHPSpirit), at(c.regenMPSpirit)
+}

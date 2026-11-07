@@ -34,6 +34,9 @@ type Config struct {
 	// GameType mirrors mangosd.conf GameType (realm type used by
 	// World::IsPvPRealm). -1 = unset: the realmlist.icon value is used.
 	GameType int
+	// InstantLogout mirrors mangosd.conf InstantLogout: minimum security
+	// level that may log out without the 20s countdown (default 1).
+	InstantLogout int
 	DBCPath           string
 	DBCLocale         int
 	DataLoadTimeout   time.Duration
@@ -83,6 +86,7 @@ func parse(args []string, output io.Writer, service, defaultPath, defaultListen 
 	var c Config
 	c.RealmID, c.SendQueue = 1, 64
 	c.GameType = -1
+	c.InstantLogout = 1
 	c.DBCPath, c.DataLoadTimeout = "dbc", 10*time.Minute
 	var path string
 	f := flag.NewFlagSet(service, flag.ContinueOnError)
@@ -224,6 +228,8 @@ func (c *Config) set(key, value string) error {
 		c.AllowTwoSideAccounts, err = strconv.ParseBool(value)
 	case "world.game_type":
 		c.GameType, err = strconv.Atoi(value)
+	case "world.instant_logout":
+		c.InstantLogout, err = strconv.Atoi(value)
 	case "network.listen":
 		c.Listen = value
 	case "network.max_connections":

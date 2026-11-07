@@ -32,6 +32,9 @@ type Player struct {
 	// then rewrites character_inventory/item_instance at release.
 	// RemovedItems lists item guids deleted during the session.
 	InventoryDirty bool
+	// EquipmentCache is characters.equipmentCache (item id + perm/temp
+	// enchant pair for every equipment slot), shown in the character list.
+	EquipmentCache string
 	RemovedItems   []uint32
 	Entered                                      bool
 	// Resting mirrors PLAYER_FLAGS_RESTING (0x20). True while the player is

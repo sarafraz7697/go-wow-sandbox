@@ -2,7 +2,10 @@ package tbc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	"wowserver/internal/domain/character"
 	"wowserver/internal/domain/inventory"
 	"wowserver/internal/entity"
 	"wowserver/internal/protocol/wire"
@@ -118,6 +121,9 @@ func (h *Handler) applyInventoryEvents(s *Session, inv *inventory.Inventory, eve
 	if len(events) > 0 {
 		s.player.Items = inv.Items()
 		s.player.InventoryDirty = true
+		if equipmentChanged(events) {
+			h.refreshStats(s)
+		}
 	}
 }
 
@@ -161,6 +167,7 @@ func (h *Handler) syncInventoryForSave(s *Session) {
 		}
 	}
 	s.player.RemovedItems = removed
+	s.player.EquipmentCache = equipmentCache(items)
 }
 
 // CMSG_SWAP_INV_ITEM: uint8 srcslot, uint8 dstslot.
@@ -249,4 +256,36 @@ func (h *Handler) destroyItem(_ context.Context, s *Session, p world.Packet) (*w
 		h.finishInventoryOp(s, inv, fl, ev)
 	}
 	return nil, nil
+}
+
+// equipmentCache ports the PlayerSave.cpp equipmentCache string: for each of
+// the 19 equipment slots "<item id> <MAKE_PAIR32(perm ench, temp ench)> ".
+func equipmentCache(items []character.PlayerItem) string {
+	var slots [inventory.EquipmentEnd]*character.PlayerItem
+	for i := range items {
+		if items[i].Bag == 0 && items[i].Slot < inventory.EquipmentEnd {
+			slots[items[i].Slot] = &items[i]
+		}
+	}
+	var b strings.Builder
+	for _, it := range slots {
+		var entry, pair uint32
+		if it != nil {
+			entry = it.Entry
+			pair = it.Fields[22] | it.Fields[22+3]<<16 // PERM and TEMP enchantment ids
+		}
+		fmt.Fprintf(&b, "%d %d ", entry, pair)
+	}
+	return b.String()
+}
+
+// equipmentChanged reports whether an equipment or bag-equip slot changed,
+// which is when the reference re-applies item mods (_ApplyItemMods).
+func equipmentChanged(events []inventory.Event) bool {
+	for _, e := range events {
+		if e.Kind == inventory.EvVisible || (e.Kind == inventory.EvInvSlot && e.Slot < inventory.EquipmentEnd) {
+			return true
+		}
+	}
+	return false
 }

@@ -9,4 +9,6 @@ type WorldSession struct {
 	Name      string
 	Key       [40]byte
 	Expansion uint8
+	// Security is account.gmlevel (AccountTypes: 0 player .. 3 admin).
+	Security uint8
 }

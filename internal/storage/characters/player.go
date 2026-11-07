@@ -133,6 +133,7 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	}); err != nil {
 		return nil, err
 	}
+	p.Skills = normalizeLanguageSkills(p.Race, p.Skills)
 	if err = read("SELECT faction,standing,flags FROM character_reputation WHERE guid=? ORDER BY faction", 128, func(r *sql.Rows) error {
 		var v character.Reputation
 		e := r.Scan(&v.Faction, &v.Standing, &v.Flags)
@@ -192,7 +193,7 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 	}
 	var result sql.Result
 	if p.Entered {
-		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.GUID, accountID)
+		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=?,health=?,power1=?,power2=?,power3=?,power4=?,power5=?,money=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.Health, p.Mana, p.Rage, p.Focus, p.Energy, p.Happiness, p.Money, p.GUID, accountID)
 	} else {
 		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.GUID, accountID)
 	}

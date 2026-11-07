@@ -230,5 +230,28 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}); err != nil {
 		return data, err
 	}
+	// Optional GameTables used by regeneration (Player::OCTRegen*PerSpirit).
+	data.RegenHP = loadGameTable(dir, "gtOCTRegenHP")
+	data.RegenHPSpirit = loadGameTable(dir, "gtRegenHPPerSpt")
+	data.RegenMPSpirit = loadGameTable(dir, "gtRegenMPPerSpt")
 	return data, nil
+}
+
+// loadGameTable reads a one-float-per-row GameTable; a missing or malformed
+// file yields nil (regeneration from spirit is then 0, as in the reference
+// when LookupEntry fails).
+func loadGameTable(dir, name string) []float32 {
+	f, err := dbc.Open(filepath.Join(dir, name+".dbc"), 1, 4)
+	if err != nil {
+		return nil
+	}
+	out := make([]float32, f.Len())
+	for i := range out {
+		v, e := f.Uint32(i, 0)
+		if e != nil {
+			return nil
+		}
+		out[i] = math.Float32frombits(v)
+	}
+	return out
 }

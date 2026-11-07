@@ -37,6 +37,8 @@ type Session struct {
 	unsupportedSeen            map[uint32]bool
 	player                     *character.Player
 	joined, logoutAt, nextSync time.Time
+	regenAt, manaUseUntil      time.Time            // regen.go: next regen tick, mana-use window
+	sitting                    bool                 // Unit stand state != stand (regen x1.5)
 	inv                        *inventory.Inventory // live inventory (inventory.go)
 	loadedItems                map[uint32]struct{}  // item guids present at login
 	allocatedItems             []uint32             // guids reserved during the session
@@ -61,7 +63,7 @@ func (s *Session) transition(next State) error {
 	case StateLoggingIn:
 		valid = valid || next == StateAuthed || next == StateInWorld
 	case StateInWorld:
-		valid = valid || next == StateLoggingOut
+		valid = valid || next == StateLoggingOut || next == StateAuthed // instant logout (LogoutPlayer(true))
 	case StateLoggingOut:
 		valid = valid || next == StateAuthed || next == StateInWorld
 	}

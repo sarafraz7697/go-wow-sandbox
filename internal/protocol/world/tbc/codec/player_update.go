@@ -3,6 +3,7 @@ package codec
 import (
 	"math"
 	"wowserver/internal/domain/character"
+	"wowserver/internal/domain/regen"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
@@ -83,6 +84,10 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 	fields[f.UNIT_FIELD_ATTACK_POWER] = uint32(stats.AttackPower)
 	fields[f.UNIT_FIELD_RANGED_ATTACK_POWER] = uint32(stats.RangedAttackPower)
 	fields[f.PLAYER_SHIELD_BLOCK] = stats.ShieldBlock
+	_, _, mpSpirit := data.RegenRatios(uint32(p.Class), uint32(p.Level))
+	manaRegen, manaRegenInt := regen.ManaRegenValues(stats.Attributes[3], stats.Attributes[4], mpSpirit)
+	fields[f.PLAYER_FIELD_MOD_MANA_REGEN] = math.Float32bits(manaRegen)
+	fields[f.PLAYER_FIELD_MOD_MANA_REGEN_INTERRUPT] = math.Float32bits(manaRegenInt)
 	for i, at := range []int{f.UNIT_FIELD_MINDAMAGE, f.UNIT_FIELD_MINOFFHANDDAMAGE, f.UNIT_FIELD_MINRANGEDDAMAGE} {
 		fields[at] = math.Float32bits(stats.DamageMin[i])
 		fields[at+1] = math.Float32bits(stats.DamageMax[i])

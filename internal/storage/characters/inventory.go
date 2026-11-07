@@ -60,5 +60,10 @@ func syncInventory(ctx context.Context, tx *sql.Tx, p *character.Player) error {
 			return err
 		}
 	}
+	if p.EquipmentCache != "" {
+		if _, err := tx.ExecContext(ctx, "UPDATE characters SET equipmentCache=? WHERE guid=?", p.EquipmentCache, p.GUID); err != nil {
+			return err
+		}
+	}
 	return nil
 }

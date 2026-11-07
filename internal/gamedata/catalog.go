@@ -64,6 +64,7 @@ func New(client ClientData, db *entity.Dataset, maxLevel uint32) (*Catalog, erro
 }
 
 func (c *Catalog) loadClient(client ClientData) error {
+	c.regenHP, c.regenHPSpirit, c.regenMPSpirit = client.RegenHP, client.RegenHPSpirit, client.RegenMPSpirit
 	for _, v := range client.Races {
 		if _, ok := c.races[v.ID]; ok || v.ID == 0 {
 			return fmt.Errorf("duplicate/invalid race %d", v.ID)

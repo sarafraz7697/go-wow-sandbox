@@ -32,6 +32,7 @@ type WorldConfig struct {
 	SendQueue                        int
 	AllowTwoSideAccounts             bool
 	GameType                         int
+	InstantLogout                    int
 	DBCPath                          string
 	DBCLocale                        int
 	DataLoadTimeout                  time.Duration
@@ -48,5 +49,5 @@ func ParseRealmd(args []string, out io.Writer) (RealmdConfig, error) {
 }
 func ParseWorld(args []string, out io.Writer) (WorldConfig, error) {
 	c, e := parse(args, out, "worldd", "configs/worldd.conf", "127.0.0.1:8085")
-	return WorldConfig{Common: common(c), CharacterDatabase: c.CharacterDatabase, WorldDatabase: c.WorldDatabase, RealmID: c.RealmID, SendQueue: c.SendQueue, AllowTwoSideAccounts: c.AllowTwoSideAccounts, GameType: c.GameType, DBCPath: c.DBCPath, DBCLocale: c.DBCLocale, DataLoadTimeout: c.DataLoadTimeout}, e
+	return WorldConfig{Common: common(c), CharacterDatabase: c.CharacterDatabase, WorldDatabase: c.WorldDatabase, RealmID: c.RealmID, SendQueue: c.SendQueue, AllowTwoSideAccounts: c.AllowTwoSideAccounts, GameType: c.GameType, InstantLogout: c.InstantLogout, DBCPath: c.DBCPath, DBCLocale: c.DBCLocale, DataLoadTimeout: c.DataLoadTimeout}, e
 }

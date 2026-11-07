@@ -109,6 +109,8 @@ func RunWorldd(ctx context.Context, c config.WorldConfig, logOutput io.Writer) e
 	h.Deleter = chardelete.NewService(chars)
 	h.Players = worldlogin.NewService(chars)
 	creator.Logger = log
+	h.InstantLogout = uint8(max(0, min(c.InstantLogout, 255)))
+	h.InstantLogoutSet = true
 
 	p.Done("worldd ready, accepting connections")
 	log.Info("worldd listening", "address", ln.Addr(), "realm_id", c.RealmID, "characters", "list, create and enter world", "movement", "local + broadcast")

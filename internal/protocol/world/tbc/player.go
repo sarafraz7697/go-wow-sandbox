@@ -274,6 +274,7 @@ func (h *Handler) sendLogoutStandState(s *Session, state uint8) {
 	if upd, e := codec.LogoutStateUpdate(s.player.GUID, state); e == nil {
 		_ = s.send(upd)
 	}
+	s.sitting = state != codec.StandStateStand
 	_ = s.send(codec.StandStateMessage(state))
 }
 func (h *Handler) sendTimeSync(s *Session) error {
@@ -300,6 +301,7 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 	// Creature random movement (MovementType 1) around this player.
 	h.tickCreatureMotion(s.player.Map, s.player.X, s.player.Y, now)
 	h.visibilityTick(s, now)
+	h.regenTick(s, now)
 	// Resting housekeeping: if the player is resting in a tavern, re-check
 	// their position against the trigger volume every tick. MaNGOS does this
 	// in UpdateAreaZoneAndOutdoors on zone change; we don't have zone-update
@@ -583,12 +585,12 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		// Reference: HandleLogoutRequestOpcode. instantLogout is true when the
 		// player is resting (PLAYER_FLAGS_RESTING), on a taxi, or has GM
 		// permission. We support the resting path here; taxi and GM come later.
-		instantLogout := s.player.Resting
+		instantLogout := s.player.Resting || (h.instantLogoutLevel() <= 3 && s.account.Security >= h.instantLogoutLevel())
 		if instantLogout {
 			// Mirror LogoutPlayer(true): save+release synchronously, return
 			// StateAuthed, send LOGOUT_RESPONSE(reason=0, instant=1) then
 			// LOGOUT_COMPLETE. No countdown, no root, no sit.
-			s.log.Debug("instant logout (resting)", "guid", s.player.GUID)
+			s.log.Debug("instant logout", "guid", s.player.GUID)
 			saveCtx, end := context.WithTimeout(ctx, h.RequestTimeout)
 			defer end()
 			if err := h.releasePlayer(saveCtx, s); err != nil {

@@ -13,7 +13,7 @@ import (
 )
 
 func TestSessionTransitions(t *testing.T) {
-	allowed := map[[2]State]bool{{StateAuthed, StateLoggingIn}: true, {StateLoggingIn, StateAuthed}: true, {StateLoggingIn, StateInWorld}: true, {StateInWorld, StateLoggingOut}: true, {StateLoggingOut, StateAuthed}: true, {StateLoggingOut, StateInWorld}: true}
+	allowed := map[[2]State]bool{{StateAuthed, StateLoggingIn}: true, {StateLoggingIn, StateAuthed}: true, {StateLoggingIn, StateInWorld}: true, {StateInWorld, StateLoggingOut}: true, {StateInWorld, StateAuthed}: true, {StateLoggingOut, StateAuthed}: true, {StateLoggingOut, StateInWorld}: true}
 	for from := StateAuthed; from <= StateClosed; from++ {
 		for to := StateAuthed; to <= StateClosed; to++ {
 			s := Session{state: from}

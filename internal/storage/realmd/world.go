@@ -12,9 +12,9 @@ import (
 func (s *Store) WorldSession(ctx context.Context, name, ip string, realmID uint32) (account.WorldSession, error) {
 	var a account.WorldSession
 	var key, builds string
-	err := s.DB.QueryRowContext(ctx, `SELECT account.id,username,COALESCE(sessionkey,''),LEAST(expansion,1),r.realmbuilds
+	err := s.DB.QueryRowContext(ctx, `SELECT account.id,username,COALESCE(sessionkey,''),LEAST(expansion,1),LEAST(gmlevel,255),r.realmbuilds
  FROM account JOIN realmlist r ON r.id=? WHERE username=? AND (locked=0 OR last_ip=?)
- AND LEAST(gmlevel,3)>=LEAST(r.allowedSecurityLevel,3)`+accessSQL, realmID, name, ip, ip).Scan(&a.ID, &a.Name, &key, &a.Expansion, &builds)
+ AND LEAST(gmlevel,3)>=LEAST(r.allowedSecurityLevel,3)`+accessSQL, realmID, name, ip, ip).Scan(&a.ID, &a.Name, &key, &a.Expansion, &a.Security, &builds)
 	if err != nil {
 		return a, err
 	}

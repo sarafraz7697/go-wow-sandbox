@@ -37,6 +37,10 @@ type Handler struct {
 	RealmID                     uint32
 	SendQueue                   int
 	IdleTimeout, RequestTimeout time.Duration
+	// InstantLogout is the minimum account security for an instant logout
+	// (mangosd.conf InstantLogout); the default 1 applies unless InstantLogoutSet.
+	InstantLogout    uint8
+	InstantLogoutSet bool
 	OnAuthenticated             func(context.Context) error
 	mu                          sync.Mutex
 	active                      map[uint64]*activeConn
@@ -328,4 +332,11 @@ func writeSession(ctx context.Context, conn net.Conn, writer *Writer, queue <-ch
 			}
 		}
 	}
+}
+
+func (h *Handler) instantLogoutLevel() uint8 {
+	if !h.InstantLogoutSet {
+		return 1
+	}
+	return h.InstantLogout
 }
