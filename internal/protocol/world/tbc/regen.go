@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"wowserver/internal/application/character/stats"
+	"wowserver/internal/domain/aura"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/domain/regen"
 	"wowserver/internal/protocol/world/tbc/codec"
@@ -44,7 +45,11 @@ func (h *Handler) regenTick(s *Session, now time.Time) {
 	s.regenAt = now.Add(regen.TickInterval * time.Millisecond)
 	st := h.regenState(s, now)
 	before := st
-	regen.Tick(&st, regen.Mods{}, regen.DefaultRates)
+	mods := regen.Mods{}
+	if s.spells != nil {
+		mods = s.spells.auras.RegenMods()
+	}
+	regen.Tick(&st, mods, regen.DefaultRates)
 	var ch []codec.FieldChange
 	if st.Health != before.Health {
 		p.Health = st.Health
@@ -75,6 +80,9 @@ func (h *Handler) refreshStats(s *Session) {
 	if err != nil {
 		s.log.Warn("stat recompute failed", "guid", p.GUID, "error", err)
 		return
+	}
+	if s.spells != nil {
+		applyAuraStats(ns, s.spells.auras.StatMods())
 	}
 	p.Stats = ns
 	var ch []codec.FieldChange
@@ -148,4 +156,22 @@ func (h *Handler) refreshStats(s *Session) {
 func manaRegenOf(h *Handler, st *character.Stats, p *character.Player) (float32, float32) {
 	_, _, mp := h.Data.RegenRatios(uint32(p.Class), uint32(p.Level))
 	return regen.ManaRegenValues(st.Attributes[3], st.Attributes[4], mp)
+}
+
+// applyAuraStats adds the aura stat sums (HandleAuraModStat, ModResistance,
+// ModIncreaseHealth) to freshly calculated stats. Derived values (max health
+// from stamina, attack power from strength) are not recomputed from them.
+func applyAuraStats(ns *character.Stats, m aura.StatMods) {
+	for i := 0; i < 5; i++ {
+		ns.Positive[i] += m.Pos[i]
+		ns.Negative[i] += m.Neg[i]
+		v := int64(ns.Attributes[i]) + int64(m.Pos[i]) - int64(m.Neg[i])
+		ns.Attributes[i] = uint32(max(v, 0))
+	}
+	for i := range ns.Resistances {
+		if i < len(m.Resist) {
+			ns.Resistances[i] = uint32(max(int64(ns.Resistances[i])+int64(m.Resist[i]), 0))
+		}
+	}
+	ns.MaxHealth = uint32(max(int64(ns.MaxHealth)+int64(m.MaxHealth), 1))
 }

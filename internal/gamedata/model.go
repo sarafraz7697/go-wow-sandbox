@@ -19,7 +19,9 @@ type Race struct {
 	// Team is ChrRaces.BaseLanguage: 7 = Alliance, 1 = Horde. Matches
 	// Player::TeamForRace in the MaNGOS reference.
 	Team uint32
-	Name string
+	// Cinematic is ChrRaces.CinematicSequenceID.
+	Cinematic uint32
+	Name      string
 }
 type Class struct {
 	ID, Power, SpellFamily uint32
@@ -110,6 +112,10 @@ type ClientData struct {
 	// gtOCTRegenHP, gtRegenHPPerSpt and gtRegenMPPerSpt (one float per
 	// (class-1)*100+level-1). Nil when a table is not shipped.
 	RegenHP, RegenHPSpirit, RegenMPSpirit []float32
+	// Spells, CastTimes and Durations feed casting (Spell.dbc, SpellCastTimes.dbc, SpellDuration.dbc).
+	Spells    []SpellInfo
+	CastTimes map[uint32]CastTime
+	Durations map[uint32]Duration
 }
 type Summary struct {
 	Races, Classes, Maps, Pairs, Outfits, Spells, Items, StartItems, StartSpells, Actions, Levels, ClassLevels, XP, Reserved, SkippedZeroItems, Taverns, CreatureTemplates, GameObjectTemplates, Quests int
@@ -125,6 +131,9 @@ type outfitKey struct {
 }
 type Catalog struct {
 	regenHP, regenHPSpirit, regenMPSpirit []float32
+	spellInfo map[uint32]*SpellInfo
+	castTimes map[uint32]CastTime
+	durations map[uint32]Duration
 	cooldowns         map[uint32]SpellCooldown
 	itemPrototypes    map[uint32]entity.ItemPrototype
 	factionIndices    map[uint32]int32

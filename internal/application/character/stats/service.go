@@ -111,7 +111,8 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 			}
 			enchant, exists := data.Enchantment(id)
 			if !exists {
-				return nil, fmt.Errorf("missing enchantment %d", id)
+				limit("unknown enchantment ids are ignored")
+				continue
 			}
 			if enchant.Condition != 0 {
 				limit("conditional meta-gem effects")

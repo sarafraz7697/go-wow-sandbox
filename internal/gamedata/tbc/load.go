@@ -124,7 +124,7 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 		// FactionID(2, byte offset 8), MaleDisplayID(4, offset 16),
 		// FemaleDisplayID(5, offset 20), BaseLanguage(8, offset 32),
 		// CinematicSequenceID(13, offset 52), Name_lang(14-29, locale).
-		data.Races = append(data.Races, gamedata.Race{ID: r.u(0), Faction: r.u(8), MaleDisplay: r.u(16), FemaleDisplay: r.u(20), Team: r.u(32), Expansion: r.u(272), Name: r.name(14, locale)})
+		data.Races = append(data.Races, gamedata.Race{ID: r.u(0), Faction: r.u(8), MaleDisplay: r.u(16), FemaleDisplay: r.u(20), Team: r.u(32), Cinematic: r.u(52), Expansion: r.u(272), Name: r.name(14, locale)})
 	}); err != nil {
 		return data, err
 	}
@@ -175,7 +175,19 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}
 	if err := load("Spell", 216, 864, func(r *record) {
 		data.SpellIDs = append(data.SpellIDs, r.u(0))
+		data.Spells = append(data.Spells, readSpellInfo(r))
 		data.Cooldowns = append(data.Cooldowns, gamedata.SpellCooldown{ID: r.u(0), Category: r.u(4), Recovery: r.u(92), CategoryRecovery: r.u(96)})
+	}); err != nil {
+		return data, err
+	}
+	data.CastTimes, data.Durations = map[uint32]gamedata.CastTime{}, map[uint32]gamedata.Duration{}
+	if err := load("SpellCastTimes", 4, 16, func(r *record) {
+		data.CastTimes[r.u(0)] = gamedata.CastTime{Base: int32(r.u(4)), PerLevel: int32(r.u(8)), Minimum: int32(r.u(12))}
+	}); err != nil {
+		return data, err
+	}
+	if err := load("SpellDuration", 4, 16, func(r *record) {
+		data.Durations[r.u(0)] = gamedata.Duration{Base: int32(r.u(4)), PerLevel: int32(r.u(8)), Max: int32(r.u(12))}
 	}); err != nil {
 		return data, err
 	}
@@ -254,4 +266,36 @@ func loadGameTable(dir, name string) []float32 {
 		out[i] = math.Float32frombits(v)
 	}
 	return out
+}
+
+// readSpellInfo reads the SpellEntry columns (4 bytes each) documented in
+// DBCStructure.h.
+func readSpellInfo(r *record) gamedata.SpellInfo {
+	c := func(col int) uint32 { return r.u(col * 4) }
+	s := gamedata.SpellInfo{
+		ID: c(0), Category: c(1), Mechanic: c(4),
+		Attributes: c(5), AttributesEx: c(6), AttributesExB: c(7),
+		Targets: c(14), CastingTimeIndex: c(22), Recovery: c(23), CategoryRecovery: c(24),
+		InterruptFlags: c(25), AuraInterruptFlags: c(26),
+		ProcCharges: c(30), MaxLevel: c(31), BaseLevel: c(32), SpellLevel: c(33),
+		DurationIndex: c(34), PowerType: c(35), ManaCost: c(36), ManaCostPerLevel: c(37),
+		ManaPerSecond: c(38), RangeIndex: c(40), Speed: r.f32(41 * 4), CumulativeAura: c(43),
+		VisualID: c(122), ManaCostPct: c(195), StartRecoveryCategory: c(196), StartRecoveryTime: c(197),
+		SchoolMask: c(215),
+	}
+	for i := 0; i < 3; i++ {
+		s.Effect[i] = c(65 + i)
+		s.DieSides[i] = int32(c(68 + i))
+		s.BaseDice[i] = c(71 + i)
+		s.RealPointsPerLevel[i] = r.f32((77 + i) * 4)
+		s.DicePerLevel[i] = r.f32((74 + i) * 4)
+		s.BasePoints[i] = int32(c(80 + i))
+		s.TargetA[i] = c(86 + i)
+		s.TargetB[i] = c(89 + i)
+		s.Aura[i] = c(95 + i)
+		s.AuraPeriod[i] = c(98 + i)
+		s.MiscValue[i] = int32(c(110 + i))
+		s.TriggerSpell[i] = c(116 + i)
+	}
+	return s
 }

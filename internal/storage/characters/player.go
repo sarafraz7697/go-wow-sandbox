@@ -69,7 +69,7 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	if p.Gender > 1 || p.Level == 0 || p.Level > 70 || p.AtLogin & ^uint32(32) != 0 {
 		return nil, character.ErrPlayerUnsupported
 	}
-	if err = tx.QueryRowContext(ctx, "SELECT power1,power3,power4,power5 FROM characters WHERE guid=?", guid).Scan(&p.Mana, &p.Focus, &p.Energy, &p.Happiness); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT power1,power3,power4,power5,cinematic FROM characters WHERE guid=?", guid).Scan(&p.Mana, &p.Focus, &p.Energy, &p.Happiness, &p.Cinematic); err != nil {
 		return nil, err
 	}
 	for _, v := range []float32{p.X, p.Y, p.Z, p.Orientation} {
@@ -77,7 +77,10 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 			return nil, fmt.Errorf("%w: invalid saved position or orientation", character.ErrPlayerUnavailable)
 		}
 	}
-	if err = tx.QueryRowContext(ctx, "SELECT map,zone,position_x,position_y,position_z FROM character_homebind WHERE guid=?", guid).Scan(&p.HomeMap, &p.HomeZone, &p.HomeX, &p.HomeY, &p.HomeZ); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT map,zone,position_x,position_y,position_z FROM character_homebind WHERE guid=?", guid).Scan(&p.HomeMap, &p.HomeZone, &p.HomeX, &p.HomeY, &p.HomeZ); errors.Is(err, sql.ErrNoRows) {
+		// No bind row: the handler falls back to the race/class start (Player::_LoadHomeBind).
+		p.HomeMissing = true
+	} else if err != nil {
 		return nil, err
 	}
 	err = tx.QueryRowContext(ctx, "SELECT tut0,tut1,tut2,tut3,tut4,tut5,tut6,tut7 FROM character_tutorial WHERE account=?", accountID).Scan(&p.Tutorials[0], &p.Tutorials[1], &p.Tutorials[2], &p.Tutorials[3], &p.Tutorials[4], &p.Tutorials[5], &p.Tutorials[6], &p.Tutorials[7])
@@ -100,11 +103,12 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		}
 		return rows.Err()
 	}
-	if err = read("SELECT spell FROM character_spell WHERE guid=? AND active=1 AND disabled=0 ORDER BY spell", 2048, func(r *sql.Rows) error {
+	if err = read("SELECT spell FROM character_spell WHERE guid=? AND active=1 AND disabled=0 ORDER BY spell", 16000, func(r *sql.Rows) error {
 		var id uint32
 		e := r.Scan(&id)
-		if id > 65535 {
-			return character.ErrPlayerUnsupported
+		if id > 65535 { // SMSG_INITIAL_SPELLS carries 16-bit ids
+			p.LoadWarnings = append(p.LoadWarnings, fmt.Sprintf("spell %d ignored: id above 65535", id))
+			return e
 		}
 		p.Spells = append(p.Spells, id)
 		return e
@@ -126,7 +130,8 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		var v character.InitialSkill
 		e := r.Scan(&v.ID, &v.Value, &v.Max)
 		if v.ID > 65535 || v.Value > 65535 || v.Max > 65535 {
-			return fmt.Errorf("%w: invalid skill record", character.ErrPlayerUnavailable)
+			p.LoadWarnings = append(p.LoadWarnings, fmt.Sprintf("skill %d ignored: invalid value %d/%d", v.ID, v.Value, v.Max))
+			return e
 		}
 		p.Skills = append(p.Skills, v)
 		return e
@@ -152,15 +157,17 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		}
 		key := uint64(bag)<<8 | uint64(v.Slot)
 		if (bag == 0 && (v.Slot >= 118 || (v.Slot >= 74 && v.Slot < 86))) || (bag != 0 && v.Slot >= 36) || owner != guid || slots[key] || len(data) > 4096 {
-			return character.ErrPlayerUnsupported
+			p.LoadWarnings = append(p.LoadWarnings, fmt.Sprintf("item %d (entry %d) ignored: invalid slot, owner or duplicate position bag=%d slot=%d", v.GUID, v.Entry, bag, v.Slot))
+			return nil
 		}
-		slots[key] = true
-		v.Bag = bag
 		var err error
 		v.Fields, err = mangosone8606.DecodeItem(data, v.GUID, v.Entry, guid)
 		if err != nil {
-			return err
+			p.LoadWarnings = append(p.LoadWarnings, fmt.Sprintf("item %d (entry %d) ignored: %v", v.GUID, v.Entry, err))
+			return nil
 		}
+		slots[key] = true
+		v.Bag = bag
 		p.Items = append(p.Items, v)
 		return nil
 	}); err != nil {
@@ -193,7 +200,7 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 	}
 	var result sql.Result
 	if p.Entered {
-		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=?,health=?,power1=?,power2=?,power3=?,power4=?,power5=?,money=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.Health, p.Mana, p.Rage, p.Focus, p.Energy, p.Happiness, p.Money, p.GUID, accountID)
+		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=?,health=?,power1=?,power2=?,power3=?,power4=?,power5=?,money=?,cinematic=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.Health, p.Mana, p.Rage, p.Focus, p.Energy, p.Happiness, p.Money, p.Cinematic, p.GUID, accountID)
 	} else {
 		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.GUID, accountID)
 	}

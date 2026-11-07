@@ -85,6 +85,11 @@ func LoginPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([
 		w.Uint32(packed)
 		w.Float32(0.01666667)
 	})
+	if p.Cinematic == 0 { // first login: SendCinematicStart(ChrRaces.CinematicSequenceID)
+		if race, ok := data.Race(uint32(p.Race)); ok {
+			add(op.SMSG_TRIGGER_CINEMATIC, func(w *wire.Writer) { w.Uint32(race.Cinematic) })
+		}
+	}
 	add(op.SMSG_CLIENT_CONTROL_UPDATE, func(w *wire.Writer) { w.PackedGUID(uint64(p.GUID)); w.Uint8(1) })
 	if firstErr != nil {
 		return nil, firstErr

@@ -78,6 +78,7 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 			}
 		}
 	}()
+	h.normalizeLoadedPlayer(s, player)
 	player.Stats, err = characterstats.Calculate(player, h.Data)
 	if err != nil {
 		s.log.Warn("player stat calculation failed", "error", err)
@@ -106,6 +107,7 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 		s.log.Warn("login packets send failed; releasing player", "guid", guid, "error", err)
 		return fail()
 	}
+	player.Cinematic = 1 // SendCinematicStart was part of the login packets when it was 0
 	player.Entered = true
 	s.recentlyLoggedOut = false
 	s.joined = time.Now()
@@ -302,6 +304,7 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 	h.tickCreatureMotion(s.player.Map, s.player.X, s.player.Y, now)
 	h.visibilityTick(s, now)
 	h.regenTick(s, now)
+	h.spellTick(s, now)
 	// Resting housekeeping: if the player is resting in a tavern, re-check
 	// their position against the trigger volume every tick. MaNGOS does this
 	// in UpdateAreaZoneAndOutdoors on zone change; we don't have zone-update
@@ -544,6 +547,7 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	})
 	add(op.CMSG_LIST_INVENTORY, h.listInventory)
 	add(op.CMSG_SWAP_INV_ITEM, h.swapInvItem)
+	h.registerSpellRoutes(add)
 	add(op.CMSG_SWAP_ITEM, h.swapItem)
 	add(op.CMSG_AUTOEQUIP_ITEM, h.autoEquipItem)
 	add(op.CMSG_AUTOEQUIP_ITEM_SLOT, h.autoEquipItemSlot)
@@ -851,6 +855,7 @@ func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) 
 	if err != nil {
 		return nil, err
 	}
+	oldX, oldY, oldZ := s.player.X, s.player.Y, s.player.Z
 	if err = movement.Apply(s.player, position); err != nil {
 		return nil, err
 	}
@@ -863,6 +868,9 @@ func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) 
 	// Stream in the creatures/gameobjects of the area being entered and drop
 	// those left behind (Player::UpdateVisibilityOf).
 	h.maybeRefreshVisibility(s)
+	if s.player.X != oldX || s.player.Y != oldY || s.player.Z != oldZ {
+		h.interruptAurasOnMove(s)
+	}
 	// Broadcast the movement to other visible players. MaNGOS builds a new
 	// packet with the mover's packed GUID prepended and calls
 	// SendMessageToSetExcept. We do the same: the payload is the client's

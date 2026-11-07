@@ -32,6 +32,12 @@ type Player struct {
 	// then rewrites character_inventory/item_instance at release.
 	// RemovedItems lists item guids deleted during the session.
 	InventoryDirty bool
+	// Cinematic is characters.cinematic: 0 until the race intro was triggered.
+	Cinematic uint32
+	// HomeMissing is set when character_homebind has no row for the character.
+	HomeMissing bool
+	// LoadWarnings lists child rows the loader skipped instead of rejecting the login.
+	LoadWarnings []string
 	// EquipmentCache is characters.equipmentCache (item id + perm/temp
 	// enchant pair for every equipment slot), shown in the character list.
 	EquipmentCache string

@@ -652,3 +652,16 @@ func (inv *Inventory) swapItem(src, dst uint16) (Failure, []Event) {
 	inv.autoUnequipOffhandIfNeed()
 	return Failure{}, inv.takeEvents()
 }
+
+// ConsumeItem ports Player::DestroyItemCount(Item*, count, true) as used by
+// Spell::TakeCastItem: the stack shrinks by count and the item is destroyed
+// when it runs out. No CanDestroy rules apply.
+func (inv *Inventory) ConsumeItem(bag, slot uint8, count uint32) []Event {
+	it := inv.ItemByPos(bag, slot)
+	if it == nil {
+		return nil
+	}
+	c := count
+	inv.destroyItemCount(it, &c, true)
+	return inv.takeEvents()
+}

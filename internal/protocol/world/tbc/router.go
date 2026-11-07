@@ -38,6 +38,7 @@ type Session struct {
 	player                     *character.Player
 	joined, logoutAt, nextSync time.Time
 	regenAt, manaUseUntil      time.Time            // regen.go: next regen tick, mana-use window
+	spells                     *spellState          // spellcast.go: current cast, cooldowns, auras
 	sitting                    bool                 // Unit stand state != stand (regen x1.5)
 	inv                        *inventory.Inventory // live inventory (inventory.go)
 	loadedItems                map[uint32]struct{}  // item guids present at login
