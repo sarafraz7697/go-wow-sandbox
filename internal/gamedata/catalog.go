@@ -18,6 +18,7 @@ func New(client ClientData, db *entity.Dataset, maxLevel uint32) (*Catalog, erro
 	if maxLevel < 1 || maxLevel > 255 {
 		return nil, fmt.Errorf("invalid max level")
 	}
+	c.maxLevel = maxLevel
 	c.cooldowns = make(map[uint32]SpellCooldown, len(client.Cooldowns))
 	for _, v := range client.Cooldowns {
 		c.cooldowns[v.ID] = v

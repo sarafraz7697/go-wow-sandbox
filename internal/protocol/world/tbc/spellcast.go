@@ -528,6 +528,10 @@ func (h *Handler) applyEffects(s *Session, now time.Time, st *castState) {
 			}
 			effects[i] = e
 			hasAura = true
+		case gamedata.EffectTeleportUnits:
+			h.effectTeleportUnits(s, info, i)
+		case gamedata.EffectScriptEffect:
+			// Spell::EffectScriptEffect has no case for these spells (e.g. 8690).
 		default:
 			h.warnOnce(s, info.ID<<2|uint32(i), "spell effect not implemented", info.ID, info.Effect[i])
 		}
@@ -593,3 +597,19 @@ func (h *Handler) takeCastItem(s *Session, st *castState) {
 
 // ITEM_EXTRA_NON_CONSUMABLE (ItemPrototype.h).
 const nonConsumableExtraFlag = 0x00000001
+
+// effectTeleportUnits ports Spell::EffectTeleportUnits for the caster as the
+// only target. Only the innkeeper (homebind) variant has data to run on:
+// spell_target_position destinations are not loaded yet.
+func (h *Handler) effectTeleportUnits(s *Session, info *gamedata.SpellInfo, i int) {
+	target := info.TargetB[i]
+	if target == 0 {
+		target = info.TargetA[i]
+	}
+	switch target {
+	case gamedata.TargetInnkeeperCoordinates:
+		h.teleportToHomebind(s)
+	default:
+		h.warnOnce(s, info.ID<<2|uint32(i), "teleport target not implemented", info.ID, target)
+	}
+}

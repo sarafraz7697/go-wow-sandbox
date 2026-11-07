@@ -75,3 +75,30 @@ func TestCooldownAndGlobalCooldown(t *testing.T) {
 		t.Fatalf("second cast must fail with NOT_READY, got %v", *ops)
 	}
 }
+
+func TestSpellStateRoundTrip(t *testing.T) {
+	h, s, _ := castFixture(t)
+	now := time.Now()
+	h.prepareSpell(s, now, h.Data.Spell(433), 1, codec.SpellTargets{}, nil, false)
+	if s.spells.auras.BySpell(433) == nil {
+		t.Fatal("aura missing")
+	}
+	p := s.player
+	h.snapshotSpellState(s, p, now)
+	if len(p.Auras) != 1 || p.Auras[0].Spell != 433 || p.Auras[0].EffectMask != 1 || p.Auras[0].Amount[0] != 61 || p.Auras[0].Period[0] != 3000 {
+		t.Fatalf("saved aura %+v", p.Auras)
+	}
+	if len(p.Cooldowns) != 1 || p.Cooldowns[0].Spell != 433 || p.Cooldowns[0].End <= now.Unix() {
+		t.Fatalf("saved cooldowns %+v", p.Cooldowns)
+	}
+	// A new login rebuilds the same state, negative timed auras aside.
+	s2 := &Session{player: p, log: s.log, send: s.send}
+	h.restoreSpellState(s2, p, now.Add(time.Second))
+	hd := s2.spells.auras.BySpell(433)
+	if hd == nil || hd.Effects[0] == nil || hd.Effects[0].Amount != 61 || hd.Effects[0].Period != 3000 || hd.MaxDuration != 18000 {
+		t.Fatalf("restored aura %+v", hd)
+	}
+	if _, ok := s2.spells.cooldowns[433]; !ok {
+		t.Fatal("cooldown not restored")
+	}
+}

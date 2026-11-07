@@ -36,6 +36,12 @@ type Player struct {
 	Cinematic uint32
 	// HomeMissing is set when character_homebind has no row for the character.
 	HomeMissing bool
+	// Cooldowns and Auras are the persisted spell state: loaded from the
+	// database at login and refreshed from the session before every save.
+	Cooldowns []SavedCooldown
+	Auras     []SavedAura
+	// OfflineSeconds is the time since the last logout (aura aging).
+	OfflineSeconds uint32
 	// LoadWarnings lists child rows the loader skipped instead of rejecting the login.
 	LoadWarnings []string
 	// EquipmentCache is characters.equipmentCache (item id + perm/temp
@@ -53,6 +59,23 @@ type Player struct {
 	// clears Resting when the player leaves.
 	InnTriggerID uint32
 }
+// SavedCooldown is one character_spell_cooldown row (End is unix seconds).
+type SavedCooldown struct {
+	Spell, Item uint32
+	End         int64
+}
+
+// SavedAura is one character_aura row (SpellAuraHolder::SetLoadedState data).
+type SavedAura struct {
+	Caster                uint64
+	Item, Spell           uint32
+	Stack, Charges        uint32
+	Amount                [3]int32
+	Period                [3]uint32
+	MaxDuration, Remain   int32
+	EffectMask            uint32
+}
+
 type Reputation struct {
 	Faction, Flags uint32
 	Standing       int32

@@ -20,15 +20,7 @@ const (
 func (h *Handler) addAura(s *Session, now time.Time, st *castState, effects [3]*aura.Effect) {
 	sp := s.sp()
 	info := st.info
-	positive := true
-	for _, e := range effects {
-		if e == nil {
-			continue
-		}
-		if (e.Name == aura.ModStat || e.Name == aura.ModResistance) && e.Amount < 0 || e.Name == aura.PeriodicDamage {
-			positive = false
-		}
-	}
+	positive := effectsPositive(effects)
 	duration := h.Data.DurationMS(info)
 	hd := aura.NewHolder(info.ID, uint64(s.player.GUID), uint8(s.player.Level), duration, positive, effects)
 	hd.InterruptFlags = info.AuraInterruptFlags
@@ -155,4 +147,17 @@ func (h *Handler) auraTick(s *Session, now time.Time) {
 // interruptAurasOnMove ports the AURA_INTERRUPT_FLAG_MOVE removal.
 func (h *Handler) interruptAurasOnMove(s *Session) {
 	h.removeAurasWithInterrupt(s, gamedata.AuraInterruptMove)
+}
+
+// effectsPositive is the positive/negative split used for aura slots.
+func effectsPositive(effects [3]*aura.Effect) bool {
+	for _, e := range effects {
+		if e == nil {
+			continue
+		}
+		if (e.Name == aura.ModStat || e.Name == aura.ModResistance) && e.Amount < 0 || e.Name == aura.PeriodicDamage {
+			return false
+		}
+	}
+	return true
 }

@@ -11,11 +11,11 @@ import (
 func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, error) {
 	level, ok := data.Level(uint32(p.Race), uint32(p.Class), uint32(p.Level))
 	if !ok {
-		return nil, character.ErrPlayerUnsupported
+		return nil, fmt.Errorf("%w: no level stats for race=%d class=%d level=%d", character.ErrPlayerUnsupported, p.Race, p.Class, p.Level)
 	}
 	base, ok := data.ClassLevel(uint32(p.Class), uint32(p.Level))
 	if !ok {
-		return nil, character.ErrPlayerUnsupported
+		return nil, fmt.Errorf("%w: no class level stats for class=%d level=%d", character.ErrPlayerUnsupported, p.Class, p.Level)
 	}
 	s := &character.Stats{AttackTime: [3]uint32{2000, 2000, 2000}}
 	var values [5]int64

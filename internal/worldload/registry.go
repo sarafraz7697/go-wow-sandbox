@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -86,6 +87,8 @@ type Table struct {
 	progress   func(rowsDone int)
 	rowsTotal  int64
 	warnBudget int
+	// pageWorkers > 1 lets scanTable fetch big tables in parallel pages.
+	pageWorkers int
 
 	rows    int
 	skipped int
@@ -124,6 +127,9 @@ func (t *Table) Skipped() int { return t.skipped }
 // running count every progressEvery rows. The query must be ordered so
 // dataset iteration is deterministic.
 func scanTable(ctx context.Context, q Queryer, t *Table, query string, progressEvery int, scan func(r scanner) error) error {
+	if t.pageWorkers > 1 && t.rowsTotal >= pagedThreshold && pageable(query) {
+		return scanPaged(ctx, q, t, query, progressEvery, scan)
+	}
 	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
 		return err
@@ -153,3 +159,125 @@ func scanTable(ctx context.Context, q Queryer, t *Table, query string, progressE
 // exits on missing tables; loaders that may legitimately be absent
 // register with SkipMissing.
 var ErrTableMissing = errors.New("table missing")
+
+const (
+	pagedThreshold = 20000 // tables smaller than this are streamed in one query
+	pageRows       = 10000
+)
+
+// pageable reports whether query is safe to split with LIMIT/OFFSET: it
+// must have a deterministic ORDER BY and no LIMIT of its own.
+func pageable(query string) bool {
+	u := strings.ToUpper(query)
+	return strings.Contains(u, " ORDER BY ") && !strings.Contains(u, " LIMIT ")
+}
+
+type pageResult struct {
+	rows [][]any
+	err  error
+}
+
+// replayScanner hands one buffered row to a loader callback exactly as
+// *sql.Rows would; every loader scans through the nullable wrappers, which
+// implement sql.Scanner.
+type replayScanner struct{ vals []any }
+
+func (r replayScanner) Scan(dest ...any) error {
+	if len(dest) != len(r.vals) {
+		return fmt.Errorf("scan: have %d columns, want %d", len(r.vals), len(dest))
+	}
+	for i, d := range dest {
+		s, ok := d.(sql.Scanner)
+		if !ok {
+			return fmt.Errorf("scan: destination %d (%T) is not a sql.Scanner", i, d)
+		}
+		if err := s.Scan(r.vals[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scanPaged fetches the table in LIMIT/OFFSET pages concurrently and feeds
+// the rows to scan in their original order from this goroutine, so loaders
+// (which mutate plain maps) stay single-threaded.
+func scanPaged(ctx context.Context, q Queryer, t *Table, query string, progressEvery int, scan func(r scanner) error) error {
+	pages := int((t.rowsTotal + pageRows - 1) / pageRows)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	out := make([]chan pageResult, pages)
+	for i := range out {
+		out[i] = make(chan pageResult, 1)
+	}
+	sem := make(chan struct{}, t.pageWorkers)
+	go func() {
+		for i := 0; i < pages; i++ {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			go func(i int) {
+				defer func() { <-sem }()
+				limit := fmt.Sprintf("%d", pageRows)
+				if i == pages-1 {
+					limit = "18446744073709551615" // last page is open-ended if the count was stale
+				}
+				out[i] <- fetchPage(ctx, q, fmt.Sprintf("%s LIMIT %s OFFSET %d", query, limit, i*pageRows))
+			}(i)
+		}
+	}()
+	if progressEvery <= 0 {
+		progressEvery = 1000
+	}
+	n := 0
+	for i := 0; i < pages; i++ {
+		var res pageResult
+		select {
+		case res = <-out[i]:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if res.err != nil {
+			return res.err
+		}
+		for _, vals := range res.rows {
+			if err := scan(replayScanner{vals}); err != nil {
+				return err
+			}
+			n++
+			if n%progressEvery == 0 {
+				t.Progress(n)
+			}
+		}
+		out[i] = nil
+	}
+	t.Progress(n)
+	return ctx.Err()
+}
+
+func fetchPage(ctx context.Context, q Queryer, query string) pageResult {
+	rows, err := q.QueryContext(ctx, query)
+	if err != nil {
+		return pageResult{err: err}
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return pageResult{err: err}
+	}
+	var res pageResult
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return pageResult{err: err}
+		}
+		res.rows = append(res.rows, vals)
+	}
+	res.err = rows.Err()
+	return res
+}

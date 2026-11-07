@@ -1,5 +1,7 @@
 package gamedata
 
+import "sort"
+
 // SpellInfo is the subset of SpellEntry (DBCStructure.h, Spell.dbc) used by
 // casting and auras. Column numbers follow the reference struct comments.
 type SpellInfo struct {
@@ -41,15 +43,19 @@ const (
 // Aura interrupt flags (Unit.h).
 const (
 	AuraInterruptMove      = 0x00000008
+	AuraInterruptTurning   = 0x00000010
+	AuraInterruptChangeMap = 0x00080000
 	AuraInterruptNotSeated = 0x00040000
 )
 
 // Spell effects and aura names this server evaluates.
 const (
-	EffectSchoolDamage = 2
-	EffectApplyAura    = 6
-	EffectHeal         = 10
-	EffectEnergize     = 30
+	EffectSchoolDamage  = 2
+	EffectApplyAura     = 6
+	EffectTeleportUnits = 5
+	EffectScriptEffect  = 77
+	EffectHeal          = 10
+	EffectEnergize      = 30
 
 	AuraPeriodicDamage       = 3
 	AuraPeriodicHeal         = 8
@@ -94,4 +100,29 @@ func (c *Catalog) SetSpellTables(spells []SpellInfo, times map[uint32]CastTime, 
 		c.spellInfo[spells[i].ID] = &spells[i]
 	}
 	c.castTimes, c.durations = times, durations
+}
+
+// Implicit spell targets used by the teleport effect (SharedDefines.h).
+const (
+	TargetInnkeeperCoordinates = 9
+	TargetTableXYZCoordinates  = 17
+)
+
+// SpellsInCategory ports sSpellCategoryStore: every spell sharing a cooldown
+// category, in ascending id order.
+func (c *Catalog) SpellsInCategory(cat uint32) []uint32 {
+	c.catOnce.Do(func() {
+		ids := make([]uint32, 0, len(c.spellInfo))
+		for id := range c.spellInfo {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		c.byCat = map[uint32][]uint32{}
+		for _, id := range ids {
+			if k := c.spellInfo[id].Category; k != 0 {
+				c.byCat[k] = append(c.byCat[k], id)
+			}
+		}
+	})
+	return c.byCat[cat]
 }

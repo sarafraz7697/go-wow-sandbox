@@ -3,20 +3,26 @@ package app
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 )
 
 // warningCollector implements worldload.Logger. It keeps the loaders'
 // messages instead of printing them, because the loading display owns the
 // console while tables stream.
 type warningCollector struct {
+	mu           sync.Mutex
 	infos, warns []string
 }
 
 func (w *warningCollector) Info(msg string, args ...any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.infos = append(w.infos, format(msg, args))
 }
 
 func (w *warningCollector) Warn(msg string, args ...any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.warns = append(w.warns, format(msg, args))
 }
 

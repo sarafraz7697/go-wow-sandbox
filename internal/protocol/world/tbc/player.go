@@ -79,11 +79,15 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 		}
 	}()
 	h.normalizeLoadedPlayer(s, player)
+	loginAt := time.Now()
+	h.restoreSpellState(s, player, loginAt)
 	player.Stats, err = characterstats.Calculate(player, h.Data)
 	if err != nil {
 		s.log.Warn("player stat calculation failed", "error", err)
 		return fail()
 	}
+	applyAuraStats(player.Stats, s.spells.auras.StatMods())
+	h.snapshotSpellState(s, player, loginAt)
 	if len(player.Stats.Limitations) > 0 {
 		s.log.Warn("player stats use base and equipment calculation", "limitations", player.Stats.Limitations)
 	}
@@ -124,6 +128,7 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	// team (from ChrRaces.BaseLanguage via gamedata) for faction-filtered
 	// broadcasts in future slices.
 	h.registerInWorld(s, player)
+	h.sendAuraState(s)
 	// The player is now InWorld. An initial time-sync send failure is not
 	// fatal; the tick loop retries on the next cadence.
 	if syncErr := h.sendTimeSync(s); syncErr != nil {
@@ -141,6 +146,9 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 		seconds = uint32(time.Since(s.joined) / time.Second)
 	}
 	h.syncInventoryForSave(s)
+	if s.player.Entered {
+		h.snapshotSpellState(s, s.player, time.Now())
+	}
 	if err := h.Players.ReleasePlayer(ctx, s.account.ID, s.player, seconds); err != nil {
 		return err
 	}
@@ -742,9 +750,11 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 		b, _ := w.Result()
 		return &world.Packet{Opcode: op.SMSG_CONTACT_LIST, Payload: b}, nil
 	})
-	for _, opcode := range []uint32{op.MSG_MOVE_WORLDPORT_ACK, op.CMSG_PLAYER_LOGOUT} {
+	for _, opcode := range []uint32{op.CMSG_PLAYER_LOGOUT} {
 		add(opcode, consume(0))
 	}
+	add(op.MSG_MOVE_WORLDPORT_ACK, h.worldportAck)
+	add(op.MSG_MOVE_TELEPORT_ACK, h.teleportAckHandler)
 	router.routes[op.CMSG_PLAYER_LOGOUT] = route{[]State{StateAuthed, StateInWorld, StateLoggingOut}, consume(0)}
 	add(op.CMSG_ZONEUPDATE, func(_ context.Context, s *Session, p world.Packet) (*world.Packet, error) {
 		r := wire.NewReader(p.Payload)
@@ -848,7 +858,9 @@ func (h *Handler) handleMovement(_ context.Context, s *Session, p world.Packet) 
 	// player is already released (e.g. logout completed in the same tick),
 	// silently drop the packet; the state machine already filtered most late
 	// packets, but StateLoggingOut can still receive movement before release.
-	if s.player == nil {
+	if s.player == nil || s.tele.pending() {
+		// Movement is ignored until the client acknowledges a teleport
+		// (HandleMovementOpcodes: IsBeingTeleported).
 		return nil, nil
 	}
 	position, err := codec.DecodeMovementPosition(p.Payload)

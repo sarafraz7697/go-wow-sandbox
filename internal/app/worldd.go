@@ -130,16 +130,12 @@ func loadStatic(ctx context.Context, c config.WorldConfig, log *slog.Logger, p *
 	}
 	defer db.DB.Close()
 	db.Log = warnings
-	const bandFrom, bandTo = 20, 60 // share of the startup bar used by the world load
+	// Tables load concurrently, so each section is printed as one finished
+	// block (title + count) instead of a live per-table counter.
 	db.OnTable = func(tp worldload.TableProgress) {
-		pct := bandFrom + (bandTo-bandFrom)*tp.Overall/100
-		switch {
-		case tp.Finished:
-			p.ui.TableDone(tp.Done, tp.Total, tp.Skipped)
-		case tp.Done == 0:
-			p.ui.TableStart(pct, tp.Name)
-		default:
-			p.ui.TableTick(tp.Done, tp.Total)
+		if tp.Finished {
+			title, noun := tableLabel(tp.Name)
+			p.ui.TableLoaded(title, noun, tp.Rows, tp.Skipped)
 		}
 	}
 	data, err := dataTBC.LoadWithProgress(ctx, c.DBCPath, c.DBCLocale, db, nil)

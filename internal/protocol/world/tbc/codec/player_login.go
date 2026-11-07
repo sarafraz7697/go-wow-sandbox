@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"sort"
 	"time"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
@@ -10,6 +11,19 @@ import (
 )
 
 func LoginPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([]world.Packet, error) {
+	return loginPackets(p, data, now, true)
+}
+
+// WorldportPackets is the part of the login sequence the reference repeats
+// after a far teleport (SendInitialPacketsBeforeAddToMap, the add-to-map
+// object update and the zone's world states). The one-time login packets
+// (dungeon difficulty, verify world, account data, MOTD, cinematic) are not
+// sent again.
+func WorldportPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([]world.Packet, error) {
+	return loginPackets(p, data, now, false)
+}
+
+func loginPackets(p *character.Player, data *gamedata.Catalog, now time.Time, full bool) ([]world.Packet, error) {
 	var packets []world.Packet
 	var firstErr error
 	add := func(opcode uint32, fill func(*wire.Writer)) {
@@ -25,17 +39,19 @@ func LoginPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([
 		}
 		packets = append(packets, world.Packet{Opcode: opcode, Payload: b})
 	}
-	add(op.MSG_SET_DUNGEON_DIFFICULTY, func(w *wire.Writer) { w.Uint32(0); w.Uint32(1); w.Uint32(0) })
-	add(op.SMSG_LOGIN_VERIFY_WORLD, func(w *wire.Writer) {
-		w.Uint32(p.Map)
-		w.Float32(p.X)
-		w.Float32(p.Y)
-		w.Float32(p.Z)
-		w.Float32(p.Orientation)
-	})
-	add(op.SMSG_ACCOUNT_DATA_TIMES, func(w *wire.Writer) { w.Bytes(make([]byte, 128)) })
-	add(op.SMSG_FEATURE_SYSTEM_STATUS, func(w *wire.Writer) { w.Bytes([]byte{2, 0}) })
-	add(op.SMSG_MOTD, func(w *wire.Writer) { w.Uint32(1); w.CString("Welcome.", 255) })
+	if full {
+		add(op.MSG_SET_DUNGEON_DIFFICULTY, func(w *wire.Writer) { w.Uint32(0); w.Uint32(1); w.Uint32(0) })
+		add(op.SMSG_LOGIN_VERIFY_WORLD, func(w *wire.Writer) {
+			w.Uint32(p.Map)
+			w.Float32(p.X)
+			w.Float32(p.Y)
+			w.Float32(p.Z)
+			w.Float32(p.Orientation)
+		})
+		add(op.SMSG_ACCOUNT_DATA_TIMES, func(w *wire.Writer) { w.Bytes(make([]byte, 128)) })
+		add(op.SMSG_FEATURE_SYSTEM_STATUS, func(w *wire.Writer) { w.Bytes([]byte{2, 0}) })
+		add(op.SMSG_MOTD, func(w *wire.Writer) { w.Uint32(1); w.CString("Welcome.", 255) })
+	}
 	add(op.SMSG_SET_REST_START, func(w *wire.Writer) { w.Uint32(0) })
 	add(op.SMSG_BINDPOINTUPDATE, func(w *wire.Writer) {
 		w.Float32(p.HomeX)
@@ -56,7 +72,15 @@ func LoginPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([
 			w.Uint16(uint16(id))
 			w.Uint16(0)
 		}
-		w.Uint16(0)
+		cds := initialCooldowns(p, data, now)
+		w.Uint16(uint16(len(cds)))
+		for _, c := range cds {
+			w.Uint16(uint16(c.spell))
+			w.Uint16(uint16(c.item))
+			w.Uint16(uint16(c.cat))
+			w.Uint32(c.cd)
+			w.Uint32(c.catCD)
+		}
 	})
 	add(op.SMSG_SEND_UNLEARN_SPELLS, func(w *wire.Writer) { w.Uint32(0) })
 	add(op.SMSG_ACTION_BUTTONS, func(w *wire.Writer) {
@@ -85,7 +109,7 @@ func LoginPackets(p *character.Player, data *gamedata.Catalog, now time.Time) ([
 		w.Uint32(packed)
 		w.Float32(0.01666667)
 	})
-	if p.Cinematic == 0 { // first login: SendCinematicStart(ChrRaces.CinematicSequenceID)
+	if full && p.Cinematic == 0 { // first login: SendCinematicStart(ChrRaces.CinematicSequenceID)
 		if race, ok := data.Race(uint32(p.Race)); ok {
 			add(op.SMSG_TRIGGER_CINEMATIC, func(w *wire.Writer) { w.Uint32(race.Cinematic) })
 		}
@@ -129,4 +153,31 @@ func NameQueryFromPresence(name string, guid, race, gender, class uint32) (world
 	w.Uint8(0)
 	b, e := w.Result()
 	return world.Packet{Opcode: op.SMSG_NAME_QUERY_RESPONSE, Payload: b}, e
+}
+
+type initialCooldown struct {
+	spell, item, cat, cd, catCD uint32
+}
+
+// initialCooldowns lists the cooldown section of SMSG_INITIAL_SPELLS
+// (Player::SendInitialSpells): spells ascending, category spells carry the
+// time in the category field.
+func initialCooldowns(p *character.Player, data *gamedata.Catalog, now time.Time) []initialCooldown {
+	var out []initialCooldown
+	for _, c := range p.Cooldowns {
+		info := data.Spell(c.Spell)
+		if info == nil || c.End <= now.Unix() {
+			continue
+		}
+		ms := uint32(c.End-now.Unix()) * 1000
+		e := initialCooldown{spell: c.Spell, item: c.Item, cat: info.Category}
+		if info.Category != 0 {
+			e.catCD = ms
+		} else {
+			e.cd = ms
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].spell < out[j].spell })
+	return out
 }

@@ -66,7 +66,7 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 		}
 		// Stale: reclaim below. The UPDATE online=1 will overwrite the stale flag.
 	}
-	if p.Gender > 1 || p.Level == 0 || p.Level > 70 || p.AtLogin & ^uint32(32) != 0 {
+	if p.Gender > 1 || p.Level == 0 || p.Level > 255 || p.AtLogin & ^uint32(32) != 0 {
 		return nil, character.ErrPlayerUnsupported
 	}
 	if err = tx.QueryRowContext(ctx, "SELECT power1,power3,power4,power5,cinematic FROM characters WHERE guid=?", guid).Scan(&p.Mana, &p.Focus, &p.Energy, &p.Happiness, &p.Cinematic); err != nil {
@@ -87,6 +87,9 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
+	if e := tx.QueryRowContext(ctx, "SELECT COALESCE(GREATEST(UNIX_TIMESTAMP()-logout_time, 0), 0) FROM characters WHERE guid=?", guid).Scan(&p.OfflineSeconds); e != nil {
+		p.OfflineSeconds = 0
+	}
 	read := func(query string, limit int, scan func(*sql.Rows) error) error {
 		rows, e := tx.QueryContext(ctx, query, guid)
 		if e != nil {
@@ -102,6 +105,29 @@ func (s *Store) AcquirePlayer(ctx context.Context, accountID uint64, guid uint32
 			}
 		}
 		return rows.Err()
+	}
+	if err = read("SELECT caster_guid,item_guid,spell,stackcount,remaincharges,basepoints0,basepoints1,basepoints2,periodictime0,periodictime1,periodictime2,maxduration,remaintime,effIndexMask FROM character_aura WHERE guid=?", 256, func(r *sql.Rows) error {
+		var a character.SavedAura
+		e := r.Scan(&a.Caster, &a.Item, &a.Spell, &a.Stack, &a.Charges, &a.Amount[0], &a.Amount[1], &a.Amount[2], &a.Period[0], &a.Period[1], &a.Period[2], &a.MaxDuration, &a.Remain, &a.EffectMask)
+		if e != nil {
+			p.LoadWarnings = append(p.LoadWarnings, fmt.Sprintf("character_aura row ignored: %v", e))
+			return nil
+		}
+		p.Auras = append(p.Auras, a)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err = read("SELECT spell,item,time FROM character_spell_cooldown WHERE guid=?", 20000, func(r *sql.Rows) error {
+		var c character.SavedCooldown
+		if e := r.Scan(&c.Spell, &c.Item, &c.End); e != nil {
+			p.LoadWarnings = append(p.LoadWarnings, fmt.Sprintf("character_spell_cooldown row ignored: %v", e))
+			return nil
+		}
+		p.Cooldowns = append(p.Cooldowns, c)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if err = read("SELECT spell FROM character_spell WHERE guid=? AND active=1 AND disabled=0 ORDER BY spell", 16000, func(r *sql.Rows) error {
 		var id uint32
@@ -219,6 +245,11 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 			return err
 		}
 	}
+	if p.Entered {
+		if err = saveSpellState(ctx, tx, p); err != nil {
+			return err
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO character_tutorial (account,tut0,tut1,tut2,tut3,tut4,tut5,tut6,tut7) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE tut0=VALUES(tut0),tut1=VALUES(tut1),tut2=VALUES(tut2),tut3=VALUES(tut3),tut4=VALUES(tut4),tut5=VALUES(tut5),tut6=VALUES(tut6),tut7=VALUES(tut7)`, accountID, p.Tutorials[0], p.Tutorials[1], p.Tutorials[2], p.Tutorials[3], p.Tutorials[4], p.Tutorials[5], p.Tutorials[6], p.Tutorials[7])
 	if err != nil {
 		return err
@@ -244,4 +275,27 @@ func (s *Store) ResetOnline(ctx context.Context, guid uint32) (int64, error) {
 	}
 	n, err := res.RowsAffected()
 	return n, err
+}
+
+// saveSpellState rewrites character_aura and character_spell_cooldown
+// (Player::_SaveAuras, SpellCooldownMgr::SaveToDB).
+func saveSpellState(ctx context.Context, tx *sql.Tx, p *character.Player) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM character_aura WHERE guid=?", p.GUID); err != nil {
+		return err
+	}
+	for _, a := range p.Auras {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO character_aura (guid,caster_guid,item_guid,spell,stackcount,remaincharges,basepoints0,basepoints1,basepoints2,periodictime0,periodictime1,periodictime2,maxduration,remaintime,effIndexMask) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			p.GUID, a.Caster, a.Item, a.Spell, a.Stack, a.Charges, a.Amount[0], a.Amount[1], a.Amount[2], a.Period[0], a.Period[1], a.Period[2], a.MaxDuration, a.Remain, a.EffectMask); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM character_spell_cooldown WHERE guid=?", p.GUID); err != nil {
+		return err
+	}
+	for _, c := range p.Cooldowns {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO character_spell_cooldown (guid,spell,item,time) VALUES (?,?,?,?)", p.GUID, c.Spell, c.Item, c.End); err != nil {
+			return err
+		}
+	}
+	return nil
 }

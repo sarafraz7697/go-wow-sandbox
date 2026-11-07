@@ -8,6 +8,7 @@
 package gamedata
 
 import (
+	"sync"
 	"sort"
 
 	"wowserver/internal/entity"
@@ -130,6 +131,9 @@ type outfitKey struct {
 	Gender, ID uint8
 }
 type Catalog struct {
+	maxLevel uint32 // highest level stored in the progression tables
+	catOnce sync.Once
+	byCat   map[uint32][]uint32 // spell category -> spell ids (sSpellCategoryStore)
 	regenHP, regenHPSpirit, regenMPSpirit []float32
 	spellInfo map[uint32]*SpellInfo
 	castTimes map[uint32]CastTime
@@ -188,13 +192,152 @@ func (c *Catalog) Outfit(race, class uint32, gender, id uint8) (Outfit, bool) {
 	v, ok := c.outfits[outfitKey{Pair{race, class}, gender, id}]
 	return v, ok
 }
+// Level ports ObjectMgr::GetPlayerLevelInfo: levels above the stored table
+// are extrapolated from the last stored level (BuildPlayerLevelInfo).
 func (c *Catalog) Level(race, class, level uint32) (Level, bool) {
-	v, ok := c.levels[levelKey{Pair{race, class}, level}]
-	return v, ok
+	if level < 1 {
+		return Level{}, false
+	}
+	pair := Pair{race, class}
+	if level <= c.maxLevel {
+		v, ok := c.levels[levelKey{pair, level}]
+		return v, ok
+	}
+	v, ok := c.levels[levelKey{pair, c.maxLevel}]
+	if !ok {
+		return Level{}, false
+	}
+	v.Level = level
+	for lvl := int(c.maxLevel) - 1; lvl < int(level); lvl++ {
+		for i, add := range extrapolatedStatGain(class, lvl) {
+			v.Stats[i] += add
+		}
+	}
+	return v, true
 }
+
+// ClassLevel ports GetPlayerClassLevelInfo: levels above the table use the
+// last stored row.
 func (c *Catalog) ClassLevel(class, level uint32) (ClassLevel, bool) {
+	if level < 1 {
+		return ClassLevel{}, false
+	}
+	if level > c.maxLevel {
+		level = c.maxLevel
+	}
 	v, ok := c.classLevels[classLevelKey{class, level}]
 	return v, ok
+}
+
+// extrapolatedStatGain is the per-level stat gain of BuildPlayerLevelInfo,
+// ordered strength, agility, stamina, intellect, spirit.
+func extrapolatedStatGain(class uint32, lvl int) [5]uint32 {
+	b := func(c bool) uint32 {
+		if c {
+			return 1
+		}
+		return 0
+	}
+	// pick(a, b, c) = (lvl > a ? 2 : (lvl > b ? 1 : 0)) style helpers
+	odd, even := lvl%2 != 0, lvl%2 == 0
+	var str, sta, agi, intel, spi uint32
+	switch class {
+	case 1: // warrior
+		if lvl > 23 {
+			str, sta = 2, 2
+		} else if lvl > 1 {
+			str, sta = 1, 1
+		}
+		agi = b(lvl > 36 || (lvl > 6 && odd))
+		intel = b(lvl > 9 && even)
+		spi = b(lvl > 9 && even)
+	case 2: // paladin
+		str = b(lvl > 3)
+		if lvl > 33 {
+			sta = 2
+		} else if lvl > 1 {
+			sta = 1
+		}
+		agi = b(lvl > 38 || (lvl > 7 && even))
+		intel = b(lvl > 6 && odd)
+		spi = b(lvl > 7)
+	case 3: // hunter
+		str, sta = b(lvl > 4), b(lvl > 4)
+		if lvl > 33 {
+			agi = 2
+		} else if lvl > 1 {
+			agi = 1
+		}
+		intel = b(lvl > 8 && odd)
+		spi = b(lvl > 38 || (lvl > 9 && even))
+	case 4: // rogue
+		str, sta = b(lvl > 5), b(lvl > 4)
+		if lvl > 16 {
+			agi = 2
+		} else if lvl > 1 {
+			agi = 1
+		}
+		intel = b(lvl > 8 && even)
+		spi = b(lvl > 38 || (lvl > 9 && even))
+	case 5: // priest
+		str = b(lvl > 9 && even)
+		sta = b(lvl > 5)
+		agi = b(lvl > 38 || (lvl > 8 && odd))
+		if lvl > 22 {
+			intel = 2
+		} else if lvl > 1 {
+			intel = 1
+		}
+		spi = b(lvl > 3)
+	case 7: // shaman
+		str = b(lvl > 34 || (lvl > 6 && odd))
+		sta = b(lvl > 4)
+		agi = b(lvl > 7 && even)
+		intel = b(lvl > 5)
+		spi = b(lvl > 4)
+	case 8: // mage
+		str = b(lvl > 9 && even)
+		sta = b(lvl > 5)
+		agi = b(lvl > 9 && even)
+		if lvl > 24 {
+			intel = 2
+		} else if lvl > 1 {
+			intel = 1
+		}
+		if lvl > 33 {
+			spi = 2
+		} else if lvl > 2 {
+			spi = 1
+		}
+	case 9: // warlock
+		str = b(lvl > 9 && even)
+		agi = b(lvl > 9 && even)
+		if lvl > 38 {
+			sta, spi = 2, 2
+		} else if lvl > 3 {
+			sta, spi = 1, 1
+		}
+		if lvl > 33 {
+			intel = 2
+		} else if lvl > 2 {
+			intel = 1
+		}
+	case 11: // druid
+		if lvl > 38 {
+			str, agi, intel, spi = 2, 2, 3, 3
+		} else {
+			str = b(lvl > 6 && odd)
+			agi = b(lvl > 8 && odd)
+			intel = b(lvl > 4)
+			spi = b(lvl > 5)
+		}
+		if lvl > 32 {
+			sta = 2
+		} else if lvl > 4 {
+			sta = 1
+		}
+	}
+	return [5]uint32{str, agi, sta, intel, spi}
 }
 func (c *Catalog) XP(level uint32) (uint32, bool) { v, ok := c.xp[level]; return v, ok }
 func (c *Catalog) StartItems(race, class uint32) []StartItem {

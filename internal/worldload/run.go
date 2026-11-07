@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -81,6 +82,24 @@ type RunOptions struct {
 	// MaxWarningsPerTable caps the per-row validation warnings logged per
 	// table, like a human-readable outErrorDb tail. Default 5.
 	MaxWarningsPerTable int
+	// Parallelism bounds how many tables load at once (default 8).
+	Parallelism int
+	// PageWorkers is how many pages of one large table are fetched at the
+	// same time (default 4; 1 disables paging).
+	PageWorkers int
+}
+
+const defaultParallelism = 8
+
+// dependencies lists loaders whose dataset output another loader validates
+// against, so the second one waits for the first. Everything else is
+// independent and runs concurrently.
+var dependencies = map[string][]string{
+	"creature":             {"creature_template"},
+	"gameobject":           {"gameobject_template"},
+	"quest_relations":      {"quest_template", "creature_template", "gameobject_template"},
+	"npc_vendor":           {"item_template"},
+	"npc_vendor_template":  {"item_template"},
 }
 
 func (o *RunOptions) maxWarnings() int {
@@ -125,81 +144,144 @@ func Run(ctx context.Context, q Queryer, dest *Dataset, opts RunOptions) (*RunRe
 		grandTotal = 1 // avoid division by zero on an empty database
 	}
 
-	// Phase 2: stream every table in order.
-	var cumulative int64
+	// Phase 2: stream the tables concurrently. A loader starts as soon as
+	// the loaders it validates against (see dependencies) are done, so
+	// independent tables overlap; each loader still fills its own dataset
+	// fields from a single goroutine.
+	var (
+		mu         sync.Mutex // serializes callbacks and cumulative counters
+		cumulative int64
+		lastPct    int
+	)
+	results := make([]TableReport, len(loaders))
+	doneCh := make(map[string]chan struct{}, len(loaders))
+	for _, l := range loaders {
+		doneCh[l.Name] = make(chan struct{})
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workers := opts.Parallelism
+	if workers <= 0 {
+		workers = defaultParallelism
+	}
+	sem := make(chan struct{}, workers)
+	var firstErr error
+	var errOnce sync.Once
+	fail := func(err error) {
+		errOnce.Do(func() { firstErr = err; cancel() })
+	}
+	// monotonic keeps the shared percentage from going backwards when
+	// several tables report at once; call with mu held.
+	monotonic := func(p int) int {
+		p = max(p, lastPct)
+		lastPct = p
+		return p
+	}
+	overallPct := func() int { return monotonic(clamp(int(float64(cumulative) / float64(grandTotal) * 100))) }
+	var wg sync.WaitGroup
 	for i, l := range loaders {
 		if totals[i] < 0 {
-			report.Tables = append(report.Tables, TableReport{Name: l.Name, Absent: true})
+			results[i] = TableReport{Name: l.Name, Absent: true}
+			close(doneCh[l.Name])
 			continue
 		}
-		started := time.Now()
-
-		// Live-progress plumbing: at most one callback per
-		// 2000 rows / 250 ms while a table streams.
-		var lastTick time.Time
-		var lastRows int
-		rowsDone := func(n int) {
-			if (opts.Progress == nil && opts.OnTable == nil) || n == 0 {
-				return
-			}
-			now := time.Now()
-			if n-lastRows < 2000 && now.Sub(lastTick) < 250*time.Millisecond {
-				return
-			}
-			lastTick, lastRows = now, n
-			tablePct := 100
-			if totals[i] > 0 {
-				tablePct = int(float64(n) / float64(totals[i]) * 100)
-				if tablePct > 100 {
-					tablePct = 100
+		wg.Add(1)
+		go func(i int, l Loader) {
+			defer wg.Done()
+			defer close(doneCh[l.Name])
+			for _, dep := range dependencies[l.Name] {
+				if ch, ok := doneCh[dep]; ok {
+					select {
+					case <-ch:
+					case <-runCtx.Done():
+						return
+					}
 				}
 			}
-			overall := int(float64(cumulative+min64(int64(n), totals[i])) / float64(grandTotal) * 100)
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-runCtx.Done():
+				return
+			}
+			if runCtx.Err() != nil {
+				return
+			}
+			started := time.Now()
+			var lastTick time.Time
+			var lastRows int
+			rowsDone := func(n int) {
+				if (opts.Progress == nil && opts.OnTable == nil) || n == 0 {
+					return
+				}
+				now := time.Now()
+				if n-lastRows < 2000 && now.Sub(lastTick) < 250*time.Millisecond {
+					return
+				}
+				lastTick, lastRows = now, n
+				tablePct := 100
+				if totals[i] > 0 {
+					tablePct = min(100, int(float64(n)/float64(totals[i])*100))
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				overall := monotonic(clamp(int(float64(cumulative+min64(int64(n), totals[i])) / float64(grandTotal) * 100)))
+				if opts.OnTable != nil {
+					opts.OnTable(TableProgress{Name: l.Name, Overall: overall, Done: int64(n), Total: totals[i]})
+				}
+				if opts.Progress != nil {
+					opts.Progress(overall, fmt.Sprintf("%s %d%% (%d/%d rows)", l.Name, tablePct, n, totals[i]))
+				}
+			}
 			if opts.OnTable != nil {
-				opts.OnTable(TableProgress{Name: l.Name, Overall: clamp(overall), Done: int64(n), Total: totals[i]})
+				mu.Lock()
+				opts.OnTable(TableProgress{Name: l.Name, Overall: overallPct(), Total: totals[i]})
+				mu.Unlock()
+			}
+			tbl := &Table{
+				Name:        l.Name,
+				log:         opts.Logger,
+				progress:    rowsDone,
+				rowsTotal:   totals[i],
+				warnBudget:  opts.maxWarnings(),
+				pageWorkers: opts.PageWorkers,
+			}
+			err := l.Load(runCtx, q, dest, tbl)
+			tr := TableReport{Name: l.Name, TookMS: time.Since(started).Milliseconds()}
+			if err != nil {
+				tr.Err = err
+				results[i] = tr
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					fail(err)
+				} else {
+					fail(fmt.Errorf("worldload %s: %w", l.Name, err))
+				}
+				return
+			}
+			tr.Rows = int64(tbl.Rows())
+			tr.Skipped = int64(tbl.Skipped())
+			results[i] = tr
+			mu.Lock()
+			defer mu.Unlock()
+			cumulative += totals[i]
+			if opts.OnTable != nil {
+				opts.OnTable(TableProgress{Name: l.Name, Overall: overallPct(), Done: totals[i], Total: totals[i], Finished: true, Rows: tr.Rows, Skipped: tr.Skipped})
+			}
+			if opts.Logger != nil {
+				opts.Logger.Info("loaded entity", "table", l.Name, "rows", tr.Rows, "skipped", tr.Skipped, "took_ms", tr.TookMS)
 			}
 			if opts.Progress != nil {
-				step := fmt.Sprintf("%s %d%% (%d/%d rows)", l.Name, tablePct, n, totals[i])
-				opts.Progress(clamp(overall), step)
+				opts.Progress(overallPct(), fmt.Sprintf("%s complete (%d rows)", l.Name, tr.Rows))
 			}
+		}(i, l)
+	}
+	wg.Wait()
+	report.Tables = results
+	if firstErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return report, ctxErr
 		}
-		if opts.OnTable != nil {
-			opts.OnTable(TableProgress{Name: l.Name, Overall: clamp(int(float64(cumulative) / float64(grandTotal) * 100)), Total: totals[i]})
-		}
-
-		tbl := &Table{
-			Name:       l.Name,
-			log:        opts.Logger,
-			progress:   rowsDone,
-			rowsTotal:  totals[i],
-			warnBudget: opts.maxWarnings(),
-		}
-		err := l.Load(ctx, q, dest, tbl)
-
-		tr := TableReport{Name: l.Name, TookMS: time.Since(started).Milliseconds()}
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				tr.Err = err
-				report.Tables = append(report.Tables, tr)
-				return report, err
-			}
-			tr.Err = err
-			report.Tables = append(report.Tables, tr)
-			return report, fmt.Errorf("worldload %s: %w", l.Name, err)
-		}
-		tr.Rows = int64(tbl.Rows())
-		tr.Skipped = int64(tbl.Skipped())
-		report.Tables = append(report.Tables, tr)
-		cumulative += totals[i]
-		if opts.OnTable != nil {
-			opts.OnTable(TableProgress{Name: l.Name, Overall: clamp(int(float64(cumulative) / float64(grandTotal) * 100)), Done: totals[i], Total: totals[i], Finished: true, Rows: tr.Rows, Skipped: tr.Skipped})
-		}
-		if opts.Logger != nil {
-			opts.Logger.Info("loaded entity", "table", l.Name, "rows", tr.Rows, "skipped", tr.Skipped, "took_ms", tr.TookMS)
-		}
-		if opts.Progress != nil {
-			opts.Progress(clamp(int(float64(cumulative)/float64(grandTotal)*100)), fmt.Sprintf("%s complete (%d rows)", l.Name, tr.Rows))
-		}
+		return report, firstErr
 	}
 	return report, nil
 }

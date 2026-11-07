@@ -39,7 +39,7 @@ func LoadWithProgress(ctx context.Context, directory string, locale int, store S
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	return gamedata.New(client, dest, 70)
+	return gamedata.New(client, dest, progressionMaxLevel(dest))
 }
 
 type record struct {
@@ -298,4 +298,37 @@ func readSpellInfo(r *record) gamedata.SpellInfo {
 		s.TriggerSpell[i] = c(116 + i)
 	}
 	return s
+}
+
+// progressionMaxLevel is the highest level the world database fully
+// describes (the reference's MaxPlayerLevel is bounded the same way by its
+// player_levelstats / player_classlevelstats / player_xp_for_level rows).
+// It never drops below the classic 70 so existing data keeps loading.
+func progressionMaxLevel(d *entity.Dataset) uint32 {
+	// Every race/class pair and every class must reach the level, so the
+	// limit is the smallest per-pair / per-class maximum.
+	perPair := map[[2]uint32]uint32{}
+	for k := range d.PlayerLevelStats {
+		key := [2]uint32{k.Race, k.Class}
+		perPair[key] = max(perPair[key], k.Level)
+	}
+	perClass := map[uint32]uint32{}
+	for k := range d.PlayerClassLevelStats {
+		perClass[k.Class] = max(perClass[k.Class], k.Level)
+	}
+	stats, class, xp := uint32(255), uint32(255), uint32(0)
+	for _, l := range perPair {
+		stats = min(stats, l)
+	}
+	for _, l := range perClass {
+		class = min(class, l)
+	}
+	for l := range d.PlayerXPForLevel {
+		xp = max(xp, l+1) // xp rows describe level -> level+1
+	}
+	m := min(stats, class)
+	if xp > 0 {
+		m = min(m, xp)
+	}
+	return min(max(m, 70), 255)
 }

@@ -90,3 +90,19 @@ func (c *Console) rewrite(line string) {
 	fmt.Fprintf(c.out, "\r%s%s", line, pad)
 	c.open, c.width = true, len(line)
 }
+
+// TableLoaded prints one finished section as an atomic two-line block, so
+// tables that finish concurrently never interleave:
+//
+//	 Loading Creature Model Based Info Data...
+//	 >> Loaded 17001 creature model based info
+func (c *Console) TableLoaded(title, noun string, rows, skipped int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeLine()
+	fmt.Fprintf(c.out, "\n Loading %s...\n >> Loaded %d %s", title, rows, noun)
+	if skipped > 0 {
+		fmt.Fprintf(c.out, " (%d skipped)", skipped)
+	}
+	fmt.Fprintln(c.out)
+}
