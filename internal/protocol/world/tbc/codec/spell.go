@@ -124,6 +124,18 @@ func SpellStart(source, caster uint64, spell uint32, count uint8, timer uint32, 
 
 // SpellGo is Spell::SendSpellGo with every target hit (no misses).
 func SpellGo(source, caster uint64, spell uint32, timestamp uint32, hit []uint64, t SpellTargets) world.Packet {
+	return SpellGoMiss(source, caster, spell, timestamp, hit, nil, t)
+}
+
+// SpellMissEntry is one entry of the miss list of WriteSpellGoTargets.
+type SpellMissEntry struct {
+	Target        uint64
+	Reason        uint8
+	ReflectResult uint8
+}
+
+// SpellGoMiss is Spell::SendSpellGo with hit and miss target lists.
+func SpellGoMiss(source, caster uint64, spell uint32, timestamp uint32, hit []uint64, miss []SpellMissEntry, t SpellTargets) world.Packet {
 	return build(op.SMSG_SPELL_GO, 50, func(w *wire.Writer) {
 		w.PackedGUID(source)
 		w.PackedGUID(caster)
@@ -134,8 +146,63 @@ func SpellGo(source, caster uint64, spell uint32, timestamp uint32, hit []uint64
 		for _, g := range hit {
 			w.Uint64(g)
 		}
-		w.Uint8(0) // misses
+		w.Uint8(uint8(len(miss)))
+		for _, m := range miss {
+			w.Uint64(m.Target)
+			w.Uint8(m.Reason)
+			if m.Reason == 11 { // SPELL_MISS_REFLECT
+				w.Uint8(m.ReflectResult)
+			}
+		}
 		t.Write(w)
+	})
+}
+
+// SpellNonMeleeDamageLog is Unit::SendSpellNonMeleeDamageLog.
+func SpellNonMeleeDamageLog(target, attacker uint64, spell, damage uint32, school uint8, absorb, resist uint32, physicalLog bool, blocked, hitInfo uint32) world.Packet {
+	return build(op.SMSG_SPELLNONMELEEDAMAGELOG, 48, func(w *wire.Writer) {
+		w.PackedGUID(target)
+		w.PackedGUID(attacker)
+		w.Uint32(spell)
+		w.Uint32(damage)
+		w.Uint8(school)
+		w.Uint32(absorb)
+		w.Uint32(resist)
+		if physicalLog {
+			w.Uint8(1)
+		} else {
+			w.Uint8(0)
+		}
+		w.Uint8(0) // unused
+		w.Uint32(blocked)
+		w.Uint32(hitInfo)
+		w.Uint8(0) // flag to use extend data
+	})
+}
+
+// SetExtraAuraInfoNeedUpdate is SpellAuraHolder::SendAuraDurationForCaster.
+func SetExtraAuraInfoNeedUpdate(target uint64, slot uint8, spell, max, remaining uint32) world.Packet {
+	return build(op.SMSG_SET_EXTRA_AURA_INFO_NEED_UPDATE, 25, func(w *wire.Writer) {
+		w.PackedGUID(target)
+		w.Uint8(slot)
+		w.Uint32(spell)
+		w.Uint32(max)
+		w.Uint32(remaining)
+	})
+}
+
+// PeriodicDamageLog is Unit::SendPeriodicAuraLog for SPELL_AURA_PERIODIC_DAMAGE.
+func PeriodicDamageLog(target, caster uint64, spell, damage, school, absorb, resist uint32) world.Packet {
+	return build(op.SMSG_PERIODICAURALOG, 44, func(w *wire.Writer) {
+		w.PackedGUID(target)
+		w.PackedGUID(caster)
+		w.Uint32(spell)
+		w.Uint32(1)
+		w.Uint32(3) // SPELL_AURA_PERIODIC_DAMAGE
+		w.Uint32(damage)
+		w.Uint32(school)
+		w.Uint32(absorb)
+		w.Uint32(resist)
 	})
 }
 

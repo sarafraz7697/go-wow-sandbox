@@ -26,6 +26,23 @@ func (t FactionTemplate) IsHostileTo(o FactionTemplate) bool {
 	return t.HostileMask&o.OurMask != 0
 }
 
+// IsFriendlyTo ports FactionTemplateEntry::IsFriendlyTo.
+func (t FactionTemplate) IsFriendlyTo(o FactionTemplate) bool {
+	if o.Faction != 0 {
+		for _, f := range t.EnemyFaction {
+			if f == o.Faction {
+				return false
+			}
+		}
+		for _, f := range t.FriendFaction {
+			if f == o.Faction {
+				return true
+			}
+		}
+	}
+	return t.FriendlyMask&o.OurMask != 0
+}
+
 // Reputation ranks (ReputationRank, SharedDefines.h).
 const (
 	RepHated    = 0
@@ -152,4 +169,21 @@ func (c *Catalog) EachCreatureSpawn(fn func(CreatureSpawnRef)) {
 	for _, s := range c.creatureSpawns {
 		fn(s)
 	}
+}
+
+// CreatureFriendlyToPlayer ports the creature-vs-player branch of
+// Unit::IsFriendlyTo: a faction with a reputation index is friendly at rank
+// >= REP_FRIENDLY, anything else uses FactionTemplateEntry::IsFriendlyTo.
+func (c *Catalog) CreatureFriendlyToPlayer(creatureTemplate, playerTemplate uint32, p PlayerReputation) bool {
+	tester, ok1 := c.factionTemplates[creatureTemplate]
+	target, ok2 := c.factionTemplates[playerTemplate]
+	if !ok1 || !ok2 {
+		return false
+	}
+	if tester.Faction != 0 {
+		if raw, ok := c.factions[tester.Faction]; ok && raw.Index >= 0 {
+			return c.ReputationRank(tester.Faction, p) >= RepFriendly
+		}
+	}
+	return tester.IsFriendlyTo(target)
 }

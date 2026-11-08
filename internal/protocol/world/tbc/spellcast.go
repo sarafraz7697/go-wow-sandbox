@@ -49,6 +49,9 @@ type spellState struct {
 	auraAt       time.Time
 	sentFields   map[int]uint32 // aura update fields the client already has
 	warned       map[uint32]bool
+	foes         map[uint32]*foeAuras // auras the player put on creatures, by spawn guid
+	delayed      []*delayedSpell      // spells still travelling to their targets
+	melee        *castState           // CURRENT_MELEE_SPELL (next swing ability)
 }
 
 func (s *Session) sp() *spellState {
@@ -159,6 +162,14 @@ func (h *Handler) cancelCast(_ context.Context, s *Session, p world.Packet) (*wo
 	if err := r.Finish(); err != nil {
 		return nil, err
 	}
+	if s.player != nil && s.spells != nil && s.spells.melee != nil && s.spells.melee.info.ID == id {
+		old := s.spells.melee
+		s.spells.melee = nil
+		caster := uint64(s.player.GUID)
+		_ = s.send(codec.SpellFailure(caster, id, 0), codec.SpellFailedOther(caster, id))
+		_ = s.send(codec.CastFailed(id, spell.FailedInterrupted, old.count))
+		return nil, nil
+	}
 	if s.player == nil || s.spells == nil || s.spells.cast == nil || s.spells.cast.info.ID != id {
 		return nil, nil
 	}
@@ -255,6 +266,20 @@ func (h *Handler) prepareSpell(s *Session, now time.Time, info *gamedata.SpellIn
 	if !triggered {
 		castMS = h.Data.CastTimeMS(info)
 	}
+	if info.IsNextMeleeSwingSpell() && !triggered {
+		// Unit::SetCurrentCastedSpell(CURRENT_MELEE_SPELL): replaces the pending one.
+		if old := sp.melee; old != nil {
+			_ = s.send(codec.SpellFailure(uint64(s.player.GUID), old.info.ID, 0), codec.SpellFailedOther(uint64(s.player.GUID), old.info.ID))
+			_ = s.send(codec.CastFailed(old.info.ID, spell.FailedInterrupted, old.count))
+		}
+		sp.melee = st
+		caster := uint64(s.player.GUID)
+		_ = s.send(codec.SpellStart(caster, caster, info.ID, count, castMS, tg))
+		if info.StartRecoveryTime > 0 {
+			sp.gcd[info.StartRecoveryCategory] = now.Add(time.Duration(info.StartRecoveryTime) * time.Millisecond)
+		}
+		return
+	}
 	if !triggered {
 		sp.cast = st
 		caster := uint64(s.player.GUID)
@@ -300,9 +325,12 @@ func (h *Handler) checkCast(s *Session, now time.Time, st *castState) uint8 {
 			return spell.FailedNotReady
 		}
 	}
-	// Only the caster itself can be targeted: other units are not simulated.
-	if st.targets.Mask&(codec.TargetFlagUnit|codec.TargetFlagUnk2) != 0 && st.targets.Unit != uint64(p.GUID) {
+	// Unit targets other than the caster are only creatures hit by hostile effects.
+	if st.targets.Mask&(codec.TargetFlagUnit|codec.TargetFlagUnk2) != 0 && st.targets.Unit != uint64(p.GUID) && !spellHasEnemyEffect(info) {
 		return spell.FailedBadTargets
+	}
+	if res := h.checkSpellTarget(s, now, st, true); res != spell.CastOK {
+		return res
 	}
 	return h.checkPower(s, st)
 }
@@ -347,6 +375,8 @@ func (h *Handler) spellTick(s *Session, now time.Time) {
 		h.castNow(s, now, sp.cast)
 	}
 	h.auraTick(s, now)
+	h.foeTick(s, now)
+	h.delayedTick(s, now)
 }
 
 // castNow ports Spell::cast for a spell whose timer ran out.
@@ -356,6 +386,11 @@ func (h *Handler) castNow(s *Session, now time.Time, st *castState) {
 		if sp.cast == st {
 			sp.cast = nil
 		}
+	}
+	if res := h.checkSpellTarget(s, now, st, false); res != spell.CastOK {
+		_ = s.send(codec.CastFailed(st.info.ID, res, st.count))
+		done()
+		return
 	}
 	if res := h.checkPower(s, st); res != spell.CastOK {
 		_ = s.send(codec.CastFailed(st.info.ID, res, st.count))
@@ -369,15 +404,34 @@ func (h *Handler) castNow(s *Session, now time.Time, st *castState) {
 	if st.item != nil {
 		source = codec.ItemGUID(st.item.guid)
 	}
-	hit := []uint64{caster}
-	if h.noUnitTargets(st.info) {
-		hit = nil
-	}
+	targets := h.fillTargets(s, now, st)
+	hit, miss := h.resolveHits(s, now, st, targets)
 	_ = s.send(codec.ClearExtraAuraInfo(caster, st.info.ID),
-		codec.SpellGo(source, caster, st.info.ID, uint32(now.UnixMilli()), hit, st.targets))
-	h.applyEffects(s, now, st)
+		codec.SpellGoMiss(source, caster, st.info.ID, uint32(now.UnixMilli()), hit, miss, st.targets))
+	if st.info.Speed > 0 {
+		for _, t := range targets {
+			if !t.self {
+				h.launch(s, now, st, t)
+			}
+		}
+	}
+	if h.processTargets(s, now, st, targets, now) {
+		sp.delayed = append(sp.delayed, &delayedSpell{st: st, targets: targets, start: now})
+	}
 	h.takeCastItem(s, st)
 	done()
+}
+
+// delayedTick lands the spells whose travel time elapsed.
+func (h *Handler) delayedTick(s *Session, now time.Time) {
+	sp := s.spells
+	keep := sp.delayed[:0]
+	for _, d := range sp.delayed {
+		if h.processTargets(s, now, d.st, d.targets, d.start) {
+			keep = append(keep, d)
+		}
+	}
+	sp.delayed = keep
 }
 
 // noUnitTargets reports whether FillTargetMap would produce no unit target:
@@ -494,12 +548,15 @@ func (h *Handler) sendFields(s *Session, ch ...codec.FieldChange) {
 }
 
 // applyEffects runs the effects of a cast on the caster (the only unit target).
-func (h *Handler) applyEffects(s *Session, now time.Time, st *castState) {
+func (h *Handler) applyEffects(s *Session, now time.Time, st *castState, mask uint32) {
 	info, p := st.info, s.player
 	caster := uint64(p.GUID)
 	var effects [3]*aura.Effect
 	hasAura := false
 	for i := 0; i < 3; i++ {
+		if mask&(1<<i) == 0 {
+			continue
+		}
 		switch info.Effect[i] {
 		case 0:
 		case gamedata.EffectHeal:

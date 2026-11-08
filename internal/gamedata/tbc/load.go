@@ -186,6 +186,12 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}); err != nil {
 		return data, err
 	}
+	data.SpellRanges = map[uint32]gamedata.SpellRange{}
+	if err := load("SpellRange", 38, 152, func(r *record) {
+		data.SpellRanges[r.u(0)] = gamedata.SpellRange{Min: r.f32(4), Max: r.f32(8)}
+	}); err != nil {
+		return data, err
+	}
 	if err := load("SpellDuration", 4, 16, func(r *record) {
 		data.Durations[r.u(0)] = gamedata.Duration{Base: int32(r.u(4)), PerLevel: int32(r.u(8)), Max: int32(r.u(12))}
 	}); err != nil {
@@ -244,6 +250,10 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	}
 	// Optional GameTables used by regeneration (Player::OCTRegen*PerSpirit).
 	data.RegenHP = loadGameTable(dir, "gtOCTRegenHP")
+	data.MeleeCritBase = loadGameTable(dir, "gtChanceToMeleeCritBase")
+	data.MeleeCritRatio = loadGameTable(dir, "gtChanceToMeleeCrit")
+	data.SpellCritBase = loadGameTable(dir, "gtChanceToSpellCritBase")
+	data.SpellCritRatio = loadGameTable(dir, "gtChanceToSpellCrit")
 	data.RegenHPSpirit = loadGameTable(dir, "gtRegenHPPerSpt")
 	data.RegenMPSpirit = loadGameTable(dir, "gtRegenMPPerSpt")
 	return data, nil
@@ -282,6 +292,11 @@ func readSpellInfo(r *record) gamedata.SpellInfo {
 		ManaPerSecond: c(38), RangeIndex: c(40), Speed: r.f32(41 * 4), CumulativeAura: c(43),
 		VisualID: c(122), ManaCostPct: c(195), StartRecoveryCategory: c(196), StartRecoveryTime: c(197),
 		SchoolMask: c(215),
+		DispelType: c(3), AttributesExC: c(8), TargetCreatureType: c(15), FacingCasterFlags: c(17),
+		EquippedItemClass: int32(c(62)), EquippedItemSubclass: int32(c(63)), EquippedItemInvTypes: int32(c(64)),
+		SpellIconID: c(124), MaxTargetLevel: c(198), SpellClassSet: c(199),
+		SpellClassMask: uint64(c(200)) | uint64(c(201))<<32,
+		MaxTargets: c(202), DefenseType: c(203), PreventionType: c(204),
 	}
 	for i := 0; i < 3; i++ {
 		s.Effect[i] = c(65 + i)
@@ -296,6 +311,8 @@ func readSpellInfo(r *record) gamedata.SpellInfo {
 		s.AuraPeriod[i] = c(98 + i)
 		s.MiscValue[i] = int32(c(110 + i))
 		s.TriggerSpell[i] = c(116 + i)
+		s.EffectMechanic[i] = c(83 + i)
+		s.EffectChainTargets[i] = c(104 + i)
 	}
 	return s
 }

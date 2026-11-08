@@ -29,6 +29,21 @@ type SpellInfo struct {
 	VisualID, ManaCostPct                   uint32
 	StartRecoveryCategory                   uint32
 	StartRecoveryTime, SchoolMask           uint32
+
+	DispelType, AttributesExC   uint32
+	TargetCreatureType          uint32
+	FacingCasterFlags           uint32
+	EquippedItemClass           int32
+	EquippedItemSubclass        int32
+	EquippedItemInvTypes        int32
+	EffectMechanic              [3]uint32
+	EffectChainTargets          [3]uint32
+	SpellIconID                 uint32
+	MaxTargetLevel              uint32
+	SpellClassSet               uint32
+	SpellClassMask              uint64
+	MaxTargets                  uint32
+	DefenseType, PreventionType uint32
 }
 
 // Spell attribute bits used by the cast code (SharedDefines.h).
@@ -36,6 +51,10 @@ const (
 	SpellAttrRanged              = 0x00000002
 	SpellAttrAbility             = 0x00000010
 	SpellAttrPassive             = 0x00000040
+	SpellAttrExReqTargetComboPoints = 0x00100000
+	SpellAttrExReqComboPoints       = 0x00400000
+	SpellAttrOnNextSwing1        = 0x00000004
+	SpellAttrOnNextSwing2        = 0x00000400
 	SpellAttrDisabledWhileActive = 0x02000000
 	SpellAttrCantCancel          = 0x80000000
 )
@@ -50,15 +69,20 @@ const (
 
 // Spell effects and aura names this server evaluates.
 const (
-	EffectSchoolDamage  = 2
-	EffectApplyAura     = 6
-	EffectTeleportUnits = 5
-	EffectScriptEffect  = 77
-	EffectHeal          = 10
-	EffectEnergize      = 30
+	EffectSchoolDamage         = 2
+	EffectWeaponDamageNoSchool = 17
+	EffectWeaponPercentDamage  = 31
+	EffectNormalizedWeaponDmg  = 58
+	EffectWeaponDamage         = 121
+	EffectApplyAura            = 6
+	EffectTeleportUnits        = 5
+	EffectScriptEffect         = 77
+	EffectHeal                 = 10
+	EffectEnergize             = 30
 
 	AuraPeriodicDamage       = 3
 	AuraPeriodicHeal         = 8
+	AuraModDamageDone        = 13
 	AuraModResistance        = 22
 	AuraPeriodicEnergize     = 24
 	AuraModStat              = 29
@@ -67,6 +91,31 @@ const (
 	AuraModPowerRegenPercent = 110
 	AuraModRegenDuringCombat = 116
 )
+
+// Spell damage classes (SpellEntry::DefenseType, SharedDefines.h).
+const (
+	DamageClassNone   = 0
+	DamageClassMagic  = 1
+	DamageClassMelee  = 2
+	DamageClassRanged = 3
+)
+
+// IsNextMeleeSwingSpell is Spell::IsNextMeleeSwingSpell.
+func (s *SpellInfo) IsNextMeleeSwingSpell() bool {
+	return s.Attributes&(SpellAttrOnNextSwing1|SpellAttrOnNextSwing2) != 0
+}
+
+// SpellRange mirrors a SpellRange.dbc row.
+type SpellRange struct{ Min, Max float32 }
+
+// SpellRange returns the range row for a SpellRangeIndex.
+func (c *Catalog) SpellRange(idx uint32) (SpellRange, bool) {
+	r, ok := c.spellRanges[idx]
+	return r, ok
+}
+
+// SetSpellRanges installs the SpellRange.dbc table (also used by tests).
+func (c *Catalog) SetSpellRanges(m map[uint32]SpellRange) { c.spellRanges = m }
 
 // CastTime and Duration mirror SpellCastTimes.dbc / SpellDuration.dbc rows.
 type CastTime struct{ Base, PerLevel, Minimum int32 }

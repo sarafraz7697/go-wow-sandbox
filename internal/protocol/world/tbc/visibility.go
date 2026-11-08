@@ -88,6 +88,10 @@ func (h *Handler) refreshVisibility(s *Session) {
 		if d > visibleKeepRadius || (!known && d > visibleRadius) {
 			continue
 		}
+		lifeHealth, lifeSet, lifeVisible := h.creatureVisibleState(cs.GUID)
+		if !lifeVisible {
+			continue // corpse already removed, respawn pending
+		}
 		inRange[guid] = struct{}{}
 		if known {
 			continue
@@ -96,6 +100,9 @@ func (h *Handler) refreshVisibility(s *Session) {
 		if !ok {
 			delete(inRange, guid)
 			continue
+		}
+		if lifeSet {
+			resolved.Health = lifeHealth
 		}
 		resolved.X, resolved.Y, resolved.Z, resolved.Orientation = x, y, z, o
 		_ = s.send(codec.CreateObjectForCreature(resolved, clock))

@@ -45,6 +45,7 @@ type Handler struct {
 	mu                          sync.Mutex
 	active                      map[uint64]*activeConn
 	motion                      creatureMotion // runtime creature movement (creaturemotion.go)
+	life                        lifeRegistry   // runtime creature health/death/respawn (combat.go)
 }
 
 // activeConn tracks one admitted account so a duplicate connection can

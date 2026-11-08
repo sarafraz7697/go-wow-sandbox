@@ -113,10 +113,17 @@ type ClientData struct {
 	// gtOCTRegenHP, gtRegenHPPerSpt and gtRegenMPPerSpt (one float per
 	// (class-1)*100+level-1). Nil when a table is not shipped.
 	RegenHP, RegenHPSpirit, RegenMPSpirit []float32
+	// MeleeCritBase and MeleeCritRatio are gtChanceToMeleeCritBase (per
+	// class) and gtChanceToMeleeCrit (class*100+level), GT_MAX_LEVEL = 100.
+	MeleeCritBase, MeleeCritRatio []float32
+	// SpellCritBase and SpellCritRatio are gtChanceToSpellCritBase / gtChanceToSpellCrit.
+	SpellCritBase, SpellCritRatio []float32
 	// Spells, CastTimes and Durations feed casting (Spell.dbc, SpellCastTimes.dbc, SpellDuration.dbc).
 	Spells    []SpellInfo
 	CastTimes map[uint32]CastTime
 	Durations map[uint32]Duration
+	// SpellRanges is SpellRange.dbc.
+	SpellRanges map[uint32]SpellRange
 }
 type Summary struct {
 	Races, Classes, Maps, Pairs, Outfits, Spells, Items, StartItems, StartSpells, Actions, Levels, ClassLevels, XP, Reserved, SkippedZeroItems, Taverns, CreatureTemplates, GameObjectTemplates, Quests int
@@ -134,10 +141,13 @@ type Catalog struct {
 	maxLevel uint32 // highest level stored in the progression tables
 	catOnce sync.Once
 	byCat   map[uint32][]uint32 // spell category -> spell ids (sSpellCategoryStore)
+	meleeCritBase, meleeCritRatio []float32
+	spellCritBase, spellCritRatio []float32
 	regenHP, regenHPSpirit, regenMPSpirit []float32
 	spellInfo map[uint32]*SpellInfo
 	castTimes map[uint32]CastTime
 	durations map[uint32]Duration
+	spellRanges map[uint32]SpellRange
 	cooldowns         map[uint32]SpellCooldown
 	itemPrototypes    map[uint32]entity.ItemPrototype
 	factionIndices    map[uint32]int32
@@ -461,4 +471,32 @@ func (c *Catalog) RegenRatios(class, level uint32) (hpBase, hpSpirit, mpSpirit f
 		return 0
 	}
 	return at(c.regenHP), at(c.regenHPSpirit), at(c.regenMPSpirit)
+}
+
+// MeleeCritFromAgility ports Player::GetMeleeCritFromAgility (percent).
+func (c *Catalog) MeleeCritFromAgility(class, level uint32, agility uint32) float32 {
+	const gtMaxLevel = 100
+	if class == 0 {
+		return 0
+	}
+	level = min(level, gtMaxLevel)
+	bi, ri := int(class-1), int((class-1)*gtMaxLevel+level-1)
+	if bi >= len(c.meleeCritBase) || ri >= len(c.meleeCritRatio) {
+		return 0
+	}
+	return (c.meleeCritBase[bi] + float32(agility)*c.meleeCritRatio[ri]) * 100
+}
+
+// SpellCritFromIntellect ports Player::GetSpellCritFromIntellect (percent).
+func (c *Catalog) SpellCritFromIntellect(class, level uint32, intellect uint32) float32 {
+	const gtMaxLevel = 100
+	if class == 0 {
+		return 0
+	}
+	level = min(level, gtMaxLevel)
+	bi, ri := int(class-1), int((class-1)*gtMaxLevel+level-1)
+	if bi >= len(c.spellCritBase) || ri >= len(c.spellCritRatio) {
+		return 0
+	}
+	return (c.spellCritBase[bi] + float32(intellect)*c.spellCritRatio[ri]) * 100
 }

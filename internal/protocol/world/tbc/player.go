@@ -308,8 +308,15 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 		return nil
 	}
 	now := time.Now()
+	// Combat swings run on every (fast) tick; the rest at the 250 ms cadence.
+	h.combatTick(s, now)
+	if now.Before(s.slowAt) {
+		return nil
+	}
+	s.slowAt = now.Add(240 * time.Millisecond)
 	// Creature random movement (MovementType 1) around this player.
 	h.tickCreatureMotion(s.player.Map, s.player.X, s.player.Y, now)
+	h.tickCreatureLife(now)
 	h.visibilityTick(s, now)
 	h.regenTick(s, now)
 	h.spellTick(s, now)
@@ -556,6 +563,7 @@ func (h *Handler) registerPlayerRoutes(router *Router) {
 	add(op.CMSG_LIST_INVENTORY, h.listInventory)
 	add(op.CMSG_SWAP_INV_ITEM, h.swapInvItem)
 	h.registerSpellRoutes(add)
+	h.registerCombatRoutes(add)
 	add(op.CMSG_SWAP_ITEM, h.swapItem)
 	add(op.CMSG_AUTOEQUIP_ITEM, h.autoEquipItem)
 	add(op.CMSG_AUTOEQUIP_ITEM_SLOT, h.autoEquipItemSlot)

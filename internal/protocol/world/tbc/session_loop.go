@@ -20,7 +20,13 @@ type received struct {
 func (s *Session) run(ctx context.Context, router *Router, incoming <-chan received, queue chan<- world.Packet) error {
         timer := time.NewTicker(250 * time.Millisecond)
         defer timer.Stop()
+        interval := 250 * time.Millisecond
         for {
+                // Melee swings are timed in milliseconds, so tick faster while fighting.
+                if want := s.tickInterval(); want != interval {
+                        timer.Reset(want)
+                        interval = want
+                }
                 select {
                 case <-timer.C:
                         if s.onTick != nil {

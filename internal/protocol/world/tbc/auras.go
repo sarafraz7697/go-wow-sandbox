@@ -46,9 +46,8 @@ func nowIfZero(t, now time.Time) time.Time {
 	return t
 }
 
-// syncAuraFields sends the changed UNIT_FIELD_AURA* words.
-func (h *Handler) syncAuraFields(s *Session) {
-	sp := s.sp()
+// auraWords builds the UNIT_FIELD_AURA* words for an aura set.
+func (h *Handler) auraWords(set *aura.Set) map[int]uint32 {
 	want := map[int]uint32{}
 	for i := 0; i < aura.MaxAuras; i++ {
 		want[f.UNIT_FIELD_AURA+i] = 0
@@ -58,7 +57,7 @@ func (h *Handler) syncAuraFields(s *Session) {
 		want[f.UNIT_FIELD_AURALEVELS+i] = 0
 		want[f.UNIT_FIELD_AURAAPPLICATIONS+i] = 0
 	}
-	for _, hd := range sp.auras.Holders() {
+	for _, hd := range set.Holders() {
 		slot := int(hd.Slot)
 		want[f.UNIT_FIELD_AURA+slot] = hd.SpellID
 		shift := uint(slot%4) * 8
@@ -73,6 +72,13 @@ func (h *Handler) syncAuraFields(s *Session) {
 			want[f.UNIT_FIELD_AURAAPPLICATIONS+slot/4] |= (info.ProcCharges - 1) << shift
 		}
 	}
+	return want
+}
+
+// syncAuraFields sends the changed UNIT_FIELD_AURA* words.
+func (h *Handler) syncAuraFields(s *Session) {
+	sp := s.sp()
+	want := h.auraWords(&sp.auras)
 	var ch []codec.FieldChange
 	for idx, v := range want {
 		if sp.sentFields[idx] != v {

@@ -7,19 +7,26 @@ import "wowserver/internal/gamedata"
 
 // SpellCastResult values (SharedDefines.h) used by the server.
 const (
-	FailedBadTargets       = 0x0B
-	FailedCasterDead       = 0x15
-	FailedDontReport       = 0x19
-	FailedError            = 0x1E
-	FailedInterrupted      = 0x25
-	FailedMoving           = 0x30
-	FailedNotKnown         = 0x3B
-	FailedNotReady         = 0x3F
-	FailedNoPower          = 0x50
-	FailedSpellInProgress  = 0x64
-	FailedSpellUnavailable = 0x66
-	FailedCasterAuraState  = 0x16
-	CastOK                 = 0xFF // custom value, never sent
+	FailedBadTargets        = 0x0B
+	FailedEquippedItemClass = 0x1B
+	FailedNoComboPoints     = 0x49
+	FailedOutOfRange        = 0x5C
+	FailedTargetsDead       = 0x68
+	FailedTargetFriendly    = 0x6E
+	FailedTooClose          = 0x7A
+	FailedUnitNotInfront    = 0x81
+	FailedCasterDead        = 0x15
+	FailedDontReport        = 0x19
+	FailedError             = 0x1E
+	FailedInterrupted       = 0x25
+	FailedMoving            = 0x30
+	FailedNotKnown          = 0x3B
+	FailedNotReady          = 0x3F
+	FailedNoPower           = 0x50
+	FailedSpellInProgress   = 0x64
+	FailedSpellUnavailable  = 0x66
+	FailedCasterAuraState   = 0x16
+	CastOK                  = 0xFF // custom value, never sent
 )
 
 // Power types (Powers).

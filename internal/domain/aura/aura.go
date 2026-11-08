@@ -14,15 +14,31 @@ const (
 
 // Aura names evaluated here (SpellAuraDefines.h).
 const (
-	PeriodicDamage       = 3
-	PeriodicHeal         = 8
-	ModResistance        = 22
-	PeriodicEnergize     = 24
-	ModStat              = 29
-	ModIncreaseHealth    = 34
-	ModIncreaseEnergy    = 35
-	ModPowerRegenPercent = 110
-	ModRegenDuringCombat = 116
+	PeriodicDamage                   = 3
+	ModDamageDone                    = 13
+	ModDamageTaken                   = 14
+	ModCritPercent                   = 52
+	ModHitChance                     = 54
+	ModSpellHitChance                = 55
+	ModSpellCritChance               = 57
+	ModSpellCritChanceSchool         = 71
+	ModDamagePercentDone             = 79
+	ModDamagePercentTaken            = 87
+	ModAttackerMeleeHitChance        = 184
+	ModAttackerRangedHitChance       = 185
+	ModAttackerSpellHitChance        = 186
+	ModAttackerMeleeCritChance       = 187
+	ModAttackerRangedCritChance      = 188
+	ModAttackerSpellWeaponCritChance = 197
+	ModAttackerSpellCritChance       = 179
+	PeriodicHeal                     = 8
+	ModResistance                    = 22
+	PeriodicEnergize                 = 24
+	ModStat                          = 29
+	ModIncreaseHealth                = 34
+	ModIncreaseEnergy                = 35
+	ModPowerRegenPercent             = 110
+	ModRegenDuringCombat             = 116
 )
 
 // Effect is one Aura of a holder (one per spell effect index).
@@ -258,4 +274,55 @@ func mulOne(v float32) float32 {
 		return 1
 	}
 	return v
+}
+
+// Total is Unit::GetTotalAuraModifier: the sum of the amounts of every effect
+// with the aura name.
+func (s *Set) Total(name uint32) int32 {
+	var t int32
+	s.each(func(_ *Holder, e *Effect) {
+		if e.Name == name {
+			t += e.Amount
+		}
+	})
+	return t
+}
+
+// TotalByMisc is GetTotalAuraModifierByMiscMask: effects whose misc value
+// shares a bit with mask.
+func (s *Set) TotalByMisc(name uint32, mask uint32) int32 {
+	var t int32
+	s.each(func(_ *Holder, e *Effect) {
+		if e.Name == name && uint32(e.Misc)&mask != 0 {
+			t += e.Amount
+		}
+	})
+	return t
+}
+
+// Multiplier is GetTotalAuraMultiplier: the product of (100+amount)/100.
+func (s *Set) Multiplier(name uint32) float32 {
+	m := float32(1)
+	s.each(func(_ *Holder, e *Effect) {
+		if e.Name == name {
+			m *= (100 + float32(e.Amount)) / 100
+		}
+	})
+	return m
+}
+
+// Each calls fn for every effect of every holder.
+func (s *Set) Each(fn func(h *Holder, e *Effect)) { s.each(fn) }
+
+func (s *Set) each(fn func(h *Holder, e *Effect)) {
+	for _, h := range s.slots {
+		if h == nil {
+			continue
+		}
+		for _, e := range h.Effects {
+			if e != nil {
+				fn(h, e)
+			}
+		}
+	}
 }
