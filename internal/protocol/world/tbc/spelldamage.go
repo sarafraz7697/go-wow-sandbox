@@ -87,6 +87,18 @@ func (h *Handler) enemyTarget(s *Session, st *castState, now time.Time) (creatur
 	if st.targets.Mask&(codec.TargetFlagUnit|codec.TargetFlagUnk2) == 0 {
 		return v, spell.FailedBadTargets
 	}
+	// Player victims (PvP): the reference validates hostility at cast time;
+	// hostile player targets are rejected here because cross-session player
+	// combat is not implemented yet (same rule as the melee path).
+	if st.targets.Unit>>32 == 0 && st.targets.Unit != uint64(s.player.GUID) {
+		if hostile, found := h.playerTargetHostility(s, st.targets.Unit); found {
+			if !hostile {
+				return v, spell.FailedTargetFriendly
+			}
+			h.warnOnce(s, pvpNotImplementedKey, "player-versus-player spells are not implemented; cast rejected", 0, 0)
+			return v, spell.FailedBadTargets
+		}
+	}
 	v, ok := h.lookupCreature(s, st.targets.Unit, now)
 	if !ok {
 		return v, spell.FailedBadTargets
@@ -683,6 +695,23 @@ func foeSimulated(name uint32) bool {
 	return false
 }
 
+// clearFoeAuras ports Unit::RemoveAllAurasOnDeath for the auras this
+// player put on a creature: the foe entry is dropped and the cleared
+// UNIT_FIELD_AURA* words are broadcast, so no aura icons stay on the corpse.
+func (h *Handler) clearFoeAuras(s *Session, v creatureView) {
+	sp := s.spells
+	if sp == nil {
+		return
+	}
+	fa, ok := sp.foes[v.ref.GUID]
+	if !ok {
+		return
+	}
+	delete(sp.foes, v.ref.GUID)
+	fa.set = aura.Set{}
+	h.syncFoeFields(s, v, fa)
+}
+
 // syncFoeFields broadcasts the creature's changed UNIT_FIELD_AURA* words.
 func (h *Handler) syncFoeFields(s *Session, v creatureView, fa *foeAuras) {
 	want := h.auraWords(&fa.set)
@@ -706,8 +735,15 @@ func (h *Handler) foeTick(s *Session, now time.Time) {
 	sp := s.spells
 	for guid, fa := range sp.foes {
 		v, ok := h.lookupCreature(s, codec.CreatureGUID(fa.ref.Data.ID, fa.ref.GUID), now)
-		if !ok || !v.alive {
+		if !ok {
 			delete(sp.foes, guid)
+			continue
+		}
+		if !v.alive {
+			// The creature died (killed by someone else); the corpse still
+			// carries this player's auras — clear them like the reference
+			// removes auras on death (RemoveAllAurasOnDeath).
+			h.clearFoeAuras(s, v)
 			continue
 		}
 		if len(fa.set.Holders()) == 0 {

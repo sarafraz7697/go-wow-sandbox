@@ -43,8 +43,12 @@ type PlayerPresence struct {
 	Name      string
 	// Team is 7 (Alliance) or 1 (Horde), from ChrRaces.BaseLanguage.
 	// Zero means unknown; faction-filtered broadcasts skip the player.
-	Team  uint32
-	Race  uint8
+	Team uint32
+	// FactionTemplate is ChrRaces.FactionID (Player::setFactionForRace):
+	// the UNIT_FIELD_FACTIONTEMPLATE observers receive so their client can
+	// resolve faction hostility (Alliance vs Horde) for this player.
+	FactionTemplate uint32
+	Race            uint8
 	Class uint8
 	// Map and Zone are the current map id and area/zone id.
 	Map  uint32

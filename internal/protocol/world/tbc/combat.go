@@ -33,6 +33,16 @@ const (
 	defaultCombatReach   = 1.5                    // player UNIT_FIELD_COMBATREACH
 	unitFlagNonAttack    = 0x00000002
 	unitFlagNotSelect    = 0x02000000
+	unitFlagInCombat     = 0x00080000 // UNIT_FLAG_IN_COMBAT (Unit.h)
+	// creatureCombatTimer approximates how long a creature stays in combat
+	// after the last damage it took. The reference sets the 5000 ms combat
+	// timer in Unit::SetInCombatState and holds creature combat open through
+	// its hostile references (threat); with no AI/threat in this server the
+	// timer alone decides when combat ends.
+	creatureCombatTimer = 5 * time.Second
+	// creatureRegenInterval is REGEN_TIME_FULL (Unit.h): Creature::RegenerateAll
+	// runs every 2 s.
+	creatureRegenInterval = 2 * time.Second
 	extraNoParry         = 0x00000004
 	extraNoBlock         = 0x00000010
 	extraNoCrush         = 0x00000020
@@ -45,6 +55,51 @@ const (
 // weaponSkills is item_weapon_skills[] of Item::GetSkill by weapon subclass.
 var weaponSkills = [21]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, skillUnarmed, 0, 173, 176, 253, 226, 228, 356}
 
+// Team ids of ChrRaces.BaseLanguage (Player::TeamForRace).
+const (
+	teamAlliance = 7
+	teamHorde    = 1
+)
+
+// pvpNotImplementedKey is the warnOnce key for rejected player-victim
+// attacks (cross-session PvP combat is not implemented yet).
+const pvpNotImplementedKey = 0x7FFFFFFF
+
+// playerHostileToPlayer ports the player-vs-player branch of
+// Unit::IsHostileTo: players of the same team are never hostile ("Green/
+// Blue — can't attack"), players of opposing teams are hostile while both
+// are flagged for PvP ("Red — can attack"). Every player of this server is
+// spawned with UNIT_FLAG_PVP (PvP realm rules), so the flag condition is
+// always true and the rule reduces to the team comparison. Duel, FFA and
+// sanctuary states do not exist here.
+func playerHostileToPlayer(attacker, victim uint32) bool {
+	if attacker == victim || attacker == 0 || victim == 0 {
+		return false // same team, or unknown team (TEAM_NONE): not attackable
+	}
+	return true
+}
+
+// playerTargetHostility resolves a player-victim attack target: found is
+// true when guid names another in-world player near the session's player,
+// and hostile then reports whether the attack is allowed by the team rules
+// (the IsFriendlyTo/team part of WorldSession::HandleAttackSwingOpcode).
+func (h *Handler) playerTargetHostility(s *Session, guid uint64) (hostile, found bool) {
+	if h.Broadcast == nil || s.player == nil {
+		return false, false
+	}
+	race, ok := h.Data.Race(uint32(s.player.Race))
+	if !ok {
+		return false, false
+	}
+	for _, np := range h.Broadcast.Nearby(s.player.GUID) {
+		if guid != uint64(np.GUID) {
+			continue
+		}
+		return playerHostileToPlayer(race.Team, np.Team), true
+	}
+	return false, false
+}
+
 // combatState is the per-session melee state (Unit::m_attacking and the
 // BASE_ATTACK timer).
 type combatState struct {
@@ -56,14 +111,32 @@ type combatState struct {
 }
 
 // creatureLife holds the mutable state of one creature spawn: damage taken,
-// death and the respawn schedule (Creature::m_corpseRemoveTime/m_respawnTime).
+// death and the respawn schedule (Creature::m_corpseRemoveTime/m_respawnTime),
+// plus the combat window (Unit::SetInCombatState m_CombatTimer) and the
+// out-of-combat health regeneration of Creature::RegenerateAll.
 type creatureLife struct {
 	spawn     gamedata.CreatureSpawnRef
+	entry     uint32 // template entry (creature GUID rebuilding)
+	unitFlags uint32 // template UNIT_FIELD_FLAGS; flag updates are absolute
 	health    uint32
+	maxHealth uint32
 	dead      bool
 	hidden    bool // corpse already removed from the world
-	decayAt   time.Time
-	respawnAt time.Time
+	// combat is the client-visible UNIT_FLAG_IN_COMBAT state; combatUntil is
+	// when the combat window closes (last damage + creatureCombatTimer).
+	combat      bool
+	combatUntil time.Time
+	regenAt     time.Time // next Creature::RegenerateAll run
+	decayAt     time.Time
+	respawnAt   time.Time
+}
+
+// lifeEvent is a lock-free snapshot for broadcasting a life-state change.
+type lifeEvent struct {
+	ref       gamedata.CreatureSpawnRef
+	entry     uint32
+	unitFlags uint32
+	health    uint32
 }
 
 type lifeRegistry struct {
@@ -172,6 +245,21 @@ func (h *Handler) attackSwing(_ context.Context, s *Session, pk world.Packet) (*
 		return nil, nil
 	}
 	now := time.Now()
+	// Player victims (PvP): validate the team like the reference does, then
+	// stop the attack — cross-session player combat (damage, death, release)
+	// is not implemented yet. Player guids are low guids, so a zero high part
+	// that no creature matches is another player.
+	if guid>>32 == 0 {
+		if hostile, found := h.playerTargetHostility(s, guid); found {
+			if !hostile {
+				s.log.Debug("attack on same-team player rejected", "target", guid)
+			} else {
+				h.warnOnce(s, pvpNotImplementedKey, "player-versus-player combat is not implemented; attack rejected", 0, 0)
+			}
+			_ = s.send(attackStopPacket(uint64(p.GUID), guid))
+			return nil, nil
+		}
+	}
 	v, ok := h.lookupCreature(s, guid, now)
 	if !ok {
 		// Enemy not found (or not a creature): stop the attack state at the client.
@@ -391,25 +479,42 @@ func (h *Handler) dealCreatureDamage(s *Session, v creatureView, damage uint32, 
 	}
 	c, ok := l.m[v.ref.GUID]
 	if !ok {
-		c = &creatureLife{spawn: v.ref, health: v.spawn.Health}
+		c = &creatureLife{spawn: v.ref, entry: v.ref.Data.ID, unitFlags: v.spawn.UnitFlags,
+			health: v.spawn.Health, maxHealth: v.spawn.Health}
 		l.m[v.ref.GUID] = c
 	}
 	if c.dead {
 		l.mu.Unlock()
 		return
 	}
+	wasCombat := c.combat
 	killed := damage >= c.health
 	if killed {
 		c.health = 0
 		c.dead = true
+		c.combat = false // Unit::SetDeathState: CombatStop clears the flag
 		c.decayAt = now.Add(corpseDecay(v.info.Rank))
 		c.respawnAt = now.Add(time.Duration(v.ref.Data.SpawnTimeSecs) * time.Second)
 	} else {
 		c.health -= damage
+		// Unit::SetInCombatState: damage refreshes the combat window and sets
+		// UNIT_FLAG_IN_COMBAT while the creature is alive.
+		c.combatUntil = now.Add(creatureCombatTimer)
+		c.combat = true
 	}
-	health := c.health
+	health, combat, unitFlags := c.health, c.combat, c.unitFlags
 	l.mu.Unlock()
 	guid := codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID)
+	if wasCombat != combat {
+		// Flag updates are absolute: the template flags with or without the
+		// combat bit, so every observer's UNIT_FIELD_FLAGS stays consistent.
+		flags := unitFlags
+		if combat {
+			flags |= unitFlagInCombat
+		}
+		h.broadcastCreatureLife(v.ref, v.x, v.y, v.z,
+			codec.ValuesUpdate(guid, []codec.FieldChange{{Index: f.UNIT_FIELD_FLAGS, Value: flags}}))
+	}
 	pkt := codec.ValuesUpdate(guid, []codec.FieldChange{{Index: f.UNIT_FIELD_HEALTH, Value: health}})
 	if h.Broadcast != nil {
 		h.Broadcast.BroadcastArea(v.ref.Data.MapID, v.x, v.y, v.z, motionBroadcast, domainworld.Packet{Opcode: pkt.Opcode, Payload: pkt.Payload})
@@ -418,10 +523,31 @@ func (h *Handler) dealCreatureDamage(s *Session, v creatureView, damage uint32, 
 	}
 	if killed {
 		h.stopCreatureMoving(v.ref.GUID)
+		// Unit::RemoveAllAurasOnDeath: the corpse loses every aura this
+		// player put on the creature (cleared fields are broadcast).
+		h.clearFoeAuras(s, v)
 		if s.combat.active && s.combat.spawn == v.ref.GUID {
 			h.combatStopVictimGone(s)
 		}
 	}
+}
+
+// broadcastCreatureLife broadcasts a values update of one creature at a
+// given position to everyone around it (SendMessageToSet).
+func (h *Handler) broadcastCreatureLife(ref gamedata.CreatureSpawnRef, x, y, z float32, pkt world.Packet) {
+	if h.Broadcast == nil {
+		return
+	}
+	h.Broadcast.BroadcastArea(ref.Data.MapID, x, y, z, motionBroadcast, domainworld.Packet{Opcode: pkt.Opcode, Payload: pkt.Payload})
+}
+
+// creatureLivePosition is the position to broadcast a creature update at:
+// the mover's current position, falling back to the spawn point.
+func (h *Handler) creatureLivePosition(ref gamedata.CreatureSpawnRef, now time.Time) (x, y, z float32) {
+	if lx, ly, lz, _, ok := h.currentCreaturePosition(ref.GUID, now); ok {
+		return lx, ly, lz
+	}
+	return ref.Data.PosX, ref.Data.PosY, ref.Data.PosZ
 }
 
 // tickCreatureLife removes decayed corpses and respawns creatures
@@ -435,6 +561,10 @@ func (h *Handler) tickCreatureLife(now time.Time) {
 	}
 	l.lastTick = now
 	var gone, back []*creatureLife
+	var regen, leftCombat []lifeEvent
+	snapshot := func(c *creatureLife) lifeEvent {
+		return lifeEvent{ref: c.spawn, entry: c.entry, unitFlags: c.unitFlags, health: c.health}
+	}
 	for id, c := range l.m {
 		switch {
 		case c.dead && !now.Before(c.respawnAt):
@@ -443,9 +573,34 @@ func (h *Handler) tickCreatureLife(now time.Time) {
 		case c.dead && !c.hidden && !now.Before(c.decayAt):
 			c.hidden = true
 			gone = append(gone, c)
+		case c.dead:
+			// corpse still lying; no regeneration
+		case c.combat && !now.Before(c.combatUntil):
+			// Unit::ClearInCombat: the combat window closed without new damage.
+			c.combat = false
+			c.regenAt = now.Add(creatureRegenInterval)
+			leftCombat = append(leftCombat, snapshot(c))
+		case !c.combat && c.health < c.maxHealth && !now.Before(c.regenAt):
+			// Creature::RegenerateAll/RegenerateHealth for a non-controlled
+			// creature: addvalue = maxValue / 3 per tick, every 2 s. Mana never
+			// drops in this server (creatures do not cast), so power regen is
+			// a no-op and not simulated.
+			c.health = min(c.health+c.maxHealth/3, c.maxHealth)
+			c.regenAt = now.Add(creatureRegenInterval)
+			regen = append(regen, snapshot(c))
 		}
 	}
 	l.mu.Unlock()
+	for _, e := range leftCombat {
+		x, y, z := h.creatureLivePosition(e.ref, now)
+		h.broadcastCreatureLife(e.ref, x, y, z, codec.ValuesUpdate(codec.CreatureGUID(e.entry, e.ref.GUID),
+			[]codec.FieldChange{{Index: f.UNIT_FIELD_FLAGS, Value: e.unitFlags}}))
+	}
+	for _, e := range regen {
+		x, y, z := h.creatureLivePosition(e.ref, now)
+		h.broadcastCreatureLife(e.ref, x, y, z, codec.ValuesUpdate(codec.CreatureGUID(e.entry, e.ref.GUID),
+			[]codec.FieldChange{{Index: f.UNIT_FIELD_HEALTH, Value: e.health}}))
+	}
 	for _, c := range gone {
 		h.broadcastCreature(c.spawn, codec.DestroyObjectGUID(codec.CreatureGUID(c.spawn.Data.ID, c.spawn.GUID)), now)
 	}
@@ -460,6 +615,8 @@ func (h *Handler) tickCreatureLife(now time.Time) {
 		if r, ok := h.Data.ResolveCreatureSpawn(c.spawn); ok {
 			h.broadcastCreature(c.spawn, codec.CreateObjectForCreature(r, uint32(now.UnixMilli())), now)
 		}
+		// The respawned creature wanders from its spawn point again.
+		h.resetMover(c.spawn.GUID, now)
 	}
 }
 
@@ -470,20 +627,44 @@ func (h *Handler) broadcastCreature(ref gamedata.CreatureSpawnRef, pk world.Pack
 	h.Broadcast.BroadcastArea(ref.Data.MapID, ref.Data.PosX, ref.Data.PosY, ref.Data.PosZ, motionBroadcast, domainworld.Packet{Opcode: pk.Opcode, Payload: pk.Payload})
 }
 
-// creatureVisibleState tells the visibility pass whether a creature is in the
-// world and with which health it must be created.
-func (h *Handler) creatureVisibleState(spawnGUID uint32) (health uint32, override, visible bool) {
+// deadOrHiddenSpawns snapshots the spawn guids that are currently dead
+// (corpse lying or already removed). Their movers must not pick new hops:
+// Unit::SetDeathState stops the movement and the corpse stays where the
+// creature died.
+func (h *Handler) deadOrHiddenSpawns() map[uint32]bool {
+	l := &h.life
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.m) == 0 {
+		return nil
+	}
+	out := make(map[uint32]bool, len(l.m))
+	for id, c := range l.m {
+		if c.dead {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// creatureVisibleState tells the visibility pass whether a creature is in
+// the world and with which live health and unit flags it must be created.
+// flags is 0 when the template flags apply unchanged (not in combat).
+func (h *Handler) creatureVisibleState(spawnGUID uint32) (health, flags uint32, override, visible bool) {
 	l := &h.life
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	c, ok := l.m[spawnGUID]
 	if !ok {
-		return 0, false, true
+		return 0, 0, false, true
 	}
 	if c.hidden {
-		return 0, false, false
+		return 0, 0, false, false
 	}
-	return c.health, true, true
+	if c.combat {
+		flags = c.unitFlags | unitFlagInCombat
+	}
+	return c.health, flags, true, true
 }
 
 func attackStartPacket(attacker, victim uint64) world.Packet {

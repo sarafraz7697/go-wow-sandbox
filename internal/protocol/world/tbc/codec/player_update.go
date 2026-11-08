@@ -59,7 +59,9 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 	fields[f.UNIT_FIELD_MAXPOWER5] = 1000000
 	fields[f.UNIT_FIELD_BASE_HEALTH] = base.Health
 	fields[f.UNIT_FIELD_BASE_MANA] = base.Mana
-	fields[f.UNIT_FIELD_FLAGS] = 8
+	// UNIT_FLAG_PVP_ATTACKABLE (every player) + UNIT_FLAG_PVP (PvP realm
+	// rules): matches the observer block so the sheet and other clients agree.
+	fields[f.UNIT_FIELD_FLAGS] = PlayerUnitFlags
 	fields[f.UNIT_FIELD_BYTES_2] = 0x2800
 	fields[f.UNIT_MOD_CAST_SPEED] = math.Float32bits(1)
 	fields[f.UNIT_FIELD_BOUNDINGRADIUS] = math.Float32bits(0.388999998569489)

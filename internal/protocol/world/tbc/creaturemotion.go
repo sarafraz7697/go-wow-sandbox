@@ -141,12 +141,18 @@ func (h *Handler) tickCreatureMotion(mapID uint32, px, py float32, now time.Time
 	if !m.init {
 		m.build(h.Data)
 	}
+	// Corpses never launch new hops (Unit::SetDeathState -> StopMoving +
+	// MoveIdle); the snapshot is taken without holding the motion lock.
+	dead := h.deadOrHiddenSpawns()
 	var sends []func()
 	r := int32(math.Ceil(motionActiveRadius / motionCellSize))
 	base := cellOf(mapID, px, py)
 	for ix := base.cx - r; ix <= base.cx+r; ix++ {
 		for iy := base.cy - r; iy <= base.cy+r; iy++ {
 			for _, c := range m.cells[motionKey{mapID, ix, iy}] {
+				if dead[c.spawn.GUID] {
+					continue // corpse: movement stopped at death
+				}
 				dx, dy := c.cx-px, c.cy-py
 				if dx*dx+dy*dy > (motionActiveRadius+c.radius)*(motionActiveRadius+c.radius) {
 					continue
@@ -188,6 +194,28 @@ func (h *Handler) tickCreatureMotion(mapID uint32, px, py float32, now time.Time
 	for _, f := range sends {
 		f()
 	}
+}
+
+// resetMover returns a respawned creature to its spawn point and lets the
+// random movement restart from there: Creature::SetDeathState(JUST_ALIVED)
+// relocates the creature home and re-initializes the movement generator.
+func (h *Handler) resetMover(spawnGUID uint32, now time.Time) {
+	m := &h.motion
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.init {
+		return // nothing was ever built; build() places movers at spawn
+	}
+	c, ok := m.byGUID[spawnGUID]
+	if !ok {
+		return
+	}
+	c.x, c.y, c.z = c.cx, c.cy, c.cz
+	c.o = c.spawn.Data.Orientation
+	c.dx, c.dy = 0, 0
+	c.moving = false
+	c.legFrom, c.legDur = time.Time{}, 0
+	c.restEnd = now
 }
 
 // currentCreaturePosition returns the live position of a spawn.

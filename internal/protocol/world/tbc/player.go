@@ -224,6 +224,7 @@ func (h *Handler) registerInWorld(s *Session, p *character.Player) {
 		AccountID:    s.account.ID,
 		Name:         p.Name,
 		Team:         race.Team,
+		FactionTemplate: race.Faction,
 		Race:         p.Race,
 		Class:        p.Class,
 		Map:          p.Map,

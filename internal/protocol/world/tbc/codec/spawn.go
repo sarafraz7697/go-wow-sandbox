@@ -10,6 +10,12 @@ import (
 	f "wowserver/internal/protocol/world/tbc/updatefields"
 )
 
+// PlayerUnitFlags is the UNIT_FIELD_FLAGS every player spawns with:
+// UNIT_FLAG_PVP_ATTACKABLE (0x8, Player::Player) plus UNIT_FLAG_PVP (0x1000),
+// because this server applies PvP realm rules — every player is permanently
+// flagged, so Alliance and Horde players can attack each other.
+const PlayerUnitFlags = 0x00000008 | 0x00001000
+
 // CreateObjectForObserver builds an SMSG_UPDATE_OBJECT packet with a single
 // UPDATETYPE_CREATE_OBJECT2 block for a player visible to another player.
 // Unlike InitialSelfUpdate, this does NOT include inventory item blocks or
@@ -46,7 +52,15 @@ func CreateObjectForObserver(p domainworld.PlayerPresence, clock uint32) world.P
 	fields[f.UNIT_FIELD_MAXPOWER2] = 1000
 	fields[f.UNIT_FIELD_POWER4] = min(p.Energy, 100)
 	fields[f.UNIT_FIELD_MAXPOWER4] = 100
-	fields[f.UNIT_FIELD_FLAGS] = 8
+	// Player unit flags of the reference: UNIT_FLAG_PVP_ATTACKABLE is set
+	// for every player (Player::Player), and this server follows PvP realm
+	// rules so every player is also permanently UNIT_FLAG_PVP flagged —
+	// opposing-team players can attack each other.
+	fields[f.UNIT_FIELD_FLAGS] = PlayerUnitFlags
+	// UNIT_FIELD_FACTIONTEMPLATE (Player::setFactionForRace): without it the
+	// observing client cannot resolve the player's faction and never offers
+	// attack on opposing-team players.
+	fields[f.UNIT_FIELD_FACTIONTEMPLATE] = p.FactionTemplate
 	fields[f.UNIT_FIELD_BYTES_2] = 0x2800
 	fields[f.UNIT_MOD_CAST_SPEED] = math.Float32bits(1)
 	fields[f.UNIT_FIELD_BOUNDINGRADIUS] = math.Float32bits(0.388999998569489)
