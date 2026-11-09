@@ -118,6 +118,9 @@ type ClientData struct {
 	MeleeCritBase, MeleeCritRatio []float32
 	// SpellCritBase and SpellCritRatio are gtChanceToSpellCritBase / gtChanceToSpellCrit.
 	SpellCritBase, SpellCritRatio []float32
+	// CombatRatings is gtCombatRatings (one float per row, row index
+	// cr*GT_MAX_LEVEL + level-1). Nil when the table is not shipped.
+	CombatRatings []float32
 	// Spells, CastTimes and Durations feed casting (Spell.dbc, SpellCastTimes.dbc, SpellDuration.dbc).
 	Spells    []SpellInfo
 	CastTimes map[uint32]CastTime
@@ -143,6 +146,7 @@ type Catalog struct {
 	byCat   map[uint32][]uint32 // spell category -> spell ids (sSpellCategoryStore)
 	meleeCritBase, meleeCritRatio []float32
 	spellCritBase, spellCritRatio []float32
+	combatRatings []float32
 	regenHP, regenHPSpirit, regenMPSpirit []float32
 	spellInfo map[uint32]*SpellInfo
 	castTimes map[uint32]CastTime
@@ -499,4 +503,103 @@ func (c *Catalog) SpellCritFromIntellect(class, level uint32, intellect uint32) 
 		return 0
 	}
 	return (c.spellCritBase[bi] + float32(intellect)*c.spellCritRatio[ri]) * 100
+}
+
+// Combat rating indexes (CR_* of Unit.h enum CombatRating): the order of
+// the PLAYER_FIELD_COMBAT_RATING_1 block.
+const (
+	CRWeaponSkill = iota
+	CRDefenseSkill
+	CRDodge
+	CRParry
+	CRBlock
+	CRHitMelee
+	CRHitRanged
+	CRHitSpell
+	CRCritMelee
+	CRCritRanged
+	CRCritSpell
+	CRHitTakenMelee
+	CRHitTakenRanged
+	CRHitTakenSpell
+	CRCritTakenMelee
+	CRCritTakenRanged
+	CRCritTakenSpell
+	CRHasteMelee
+	CRHasteRanged
+	CRHasteSpell
+	CRWeaponSkillMainHand
+	CRWeaponSkillOffHand
+	CRWeaponSkillRanged
+	CRExpertise
+)
+
+// ItemWeaponSkills is item_weapon_skills[] of Item::GetSkill, indexed by
+// weapon subclass; 0 entries have no weapon skill of their own.
+var ItemWeaponSkills = [21]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, 162, 0, 173, 176, 253, 226, 228, 356}
+
+// RatingMultiplier ports Player::GetRatingMultiplier: 1 / gtCombatRatings
+// at row cr*GT_MAX_LEVEL + level-1. A missing table or row yields 1 like
+// the reference's failed LookupEntry.
+func (c *Catalog) RatingMultiplier(cr, level uint32) float32 {
+	const gtMaxLevel = 100
+	if level > gtMaxLevel {
+		level = gtMaxLevel
+	}
+	i := int(cr)*gtMaxLevel + int(level) - 1
+	if i < 0 || i >= len(c.combatRatings) || c.combatRatings[i] == 0 {
+		return 1
+	}
+	return 1 / c.combatRatings[i]
+}
+
+// RatingBonus ports Player::GetRatingBonusValue: rating points converted
+// to their percentage (or skill/expertise) bonus at the given level.
+func (c *Catalog) RatingBonus(cr, level uint32, rating int32) float32 {
+	return float32(rating) * c.RatingMultiplier(cr, level)
+}
+
+// dodgeBase and dodgeCritMul are the hardcoded tables of
+// Player::GetDodgeFromAgility, indexed by class-1.
+var (
+	dodgeBase   = [11]float32{0.0075, 0.00652, -0.0545, -0.0059, 0.03183, 0.0114, 0.0167, 0.034575, 0.02011, 0, -0.0187}
+	dodgeCritMul = [11]float32{1.1, 1.0, 1.6, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0, 1.7}
+)
+
+// DodgeFromAgility ports Player::GetDodgeFromAgility (percent): the class
+// base plus agility times the crit-per-agility ratio with the class dodge
+// multiplier.
+func (c *Catalog) DodgeFromAgility(class, level, agility uint32) float32 {
+	const gtMaxLevel = 100
+	if class == 0 || class > 11 {
+		return 0
+	}
+	level = min(level, gtMaxLevel)
+	ri := int(class-1)*gtMaxLevel + int(level) - 1
+	if ri >= len(c.meleeCritRatio) {
+		return 0
+	}
+	dodge := dodgeBase[class-1] + float32(agility)*c.meleeCritRatio[ri]*dodgeCritMul[class-1]
+	return dodge * 100
+}
+
+// PlayerCanParry reports whether any known spell grants the parry ability
+// (SPELL_EFFECT_PARRY learned through Player::SetCanParry).
+func (c *Catalog) PlayerCanParry(spells []uint32) bool { return c.playerHasSpellEffect(spells, 22) }
+
+// PlayerCanBlock reports whether any known spell grants the block ability
+// (SPELL_EFFECT_BLOCK learned through Player::SetCanBlock).
+func (c *Catalog) PlayerCanBlock(spells []uint32) bool { return c.playerHasSpellEffect(spells, 23) }
+
+func (c *Catalog) playerHasSpellEffect(spells []uint32, effect uint32) bool {
+	for _, id := range spells {
+		if info := c.Spell(id); info != nil {
+			for _, e := range info.Effect {
+				if e == effect {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

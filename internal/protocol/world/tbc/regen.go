@@ -140,6 +140,25 @@ func (h *Handler) refreshStats(s *Session) {
 	if old.ShieldBlock != ns.ShieldBlock {
 		set(f.PLAYER_SHIELD_BLOCK, ns.ShieldBlock)
 	}
+	// Combat ratings and the derived character-sheet percentages.
+	for cr, v := range ns.Ratings {
+		if v != 0 {
+			set(f.PLAYER_FIELD_COMBAT_RATING_1+cr, uint32(v))
+		}
+	}
+	flt(f.PLAYER_BLOCK_PERCENTAGE, old.BlockPct, ns.BlockPct)
+	flt(f.PLAYER_DODGE_PERCENTAGE, old.DodgePct, ns.DodgePct)
+	flt(f.PLAYER_PARRY_PERCENTAGE, old.ParryPct, ns.ParryPct)
+	flt(f.PLAYER_CRIT_PERCENTAGE, old.CritPct, ns.CritPct)
+	flt(f.PLAYER_RANGED_CRIT_PERCENTAGE, old.RangedCritPct, ns.RangedCritPct)
+	flt(f.PLAYER_OFFHAND_CRIT_PERCENTAGE, old.OffhandCritPct, ns.OffhandCritPct)
+	for i := range ns.SpellCritPct {
+		flt(f.PLAYER_SPELL_CRIT_PERCENTAGE1+i, old.SpellCritPct[i], ns.SpellCritPct[i])
+	}
+	if old.Expertise != ns.Expertise {
+		set(f.PLAYER_EXPERTISE, uint32(ns.Expertise))
+		set(f.PLAYER_OFFHAND_EXPERTISE, uint32(ns.Expertise))
+	}
 	st := h.regenState(s, time.Now())
 	oldRegen, oldInt := manaRegenOf(h, old, p)
 	if st.ManaRegen != oldRegen {

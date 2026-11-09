@@ -10,5 +10,17 @@ type Stats struct {
 	AttackTime                     [3]uint32
 	DamageMin, DamageMax           [3]float32
 	ShieldBlock                    uint32
-	Limitations                    []string
+	// Ratings are the summed combat rating points
+	// (PLAYER_FIELD_COMBAT_RATING_1 + cr, CR_* of Unit.h).
+	Ratings [24]int32
+	// Character-sheet percentages (PLAYER_*_PERCENTAGE, in percent).
+	CritPct, RangedCritPct, OffhandCritPct float32
+	DodgePct, ParryPct, BlockPct           float32
+	// SpellCritPct is PLAYER_FIELD_SPELL_CRIT_PERCENTAGE1 by school; the
+	// physical school (index 0) stays 0.
+	SpellCritPct [7]float32
+	// Expertise is PLAYER_EXPERTISE/PLAYER_OFFHAND_EXPERTISE: the rating
+	// bonus of CR_EXPERTISE (UpdateExpertise).
+	Expertise int32
+	Limitations []string
 }

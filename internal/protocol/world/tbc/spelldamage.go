@@ -235,7 +235,9 @@ func (h *Handler) spellHitResult(s *Session, st *castState, v creatureView, foe 
 	switch info.DefenseType {
 	case gamedata.DamageClassMagic:
 		hit := foe.Total(aura.ModAttackerSpellHitChance)
-		bonus := s.sp().auras.Total(aura.ModSpellHitChance)
+		// Player::UpdateSpellHitChances: the spell hit rating is part of the
+		// caster's hit bonus.
+		bonus := s.sp().auras.Total(aura.ModSpellHitChance) + int32(h.Data.RatingBonus(gamedata.CRHitSpell, level, p.Stats.Ratings[gamedata.CRHitSpell]))
 		return combat.MagicHit(rng{}, level, v.spawn.Level, false, bonus, float32(hit), info.AttributesExC&spellAttrExCCantMiss != 0)
 	case gamedata.DamageClassMelee, gamedata.DamageClassRanged:
 		in := h.meleeSpellInput(s, info, v, foe)
@@ -255,9 +257,14 @@ func (h *Handler) meleeSpellInput(s *Session, info *gamedata.SpellInfo, v creatu
 	ranged := info.DefenseType == gamedata.DamageClassRanged
 	mod := float32(s.sp().auras.Total(aura.ModHitChance))
 	mod -= float32(foe.Total(aura.ModAttackerMeleeHitChance))
+	mod += h.Data.RatingBonus(gamedata.CRHitMelee, level, p.Stats.Ratings[gamedata.CRHitMelee])
 	if ranged {
-		mod = float32(s.sp().auras.Total(aura.ModHitChance)) - float32(foe.Total(aura.ModAttackerRangedHitChance))
+		mod = float32(s.sp().auras.Total(aura.ModHitChance)) - float32(foe.Total(aura.ModAttackerRangedHitChance)) +
+			h.Data.RatingBonus(gamedata.CRHitRanged, level, p.Stats.Ratings[gamedata.CRHitRanged])
 	}
+	// GetExpertiseDodgeOrParryReduction lowers the victim dodge/parry
+	// chances of the yellow hit (MeleeSpellHitResult).
+	exp := h.Data.RatingBonus(gamedata.CRExpertise, level, p.Stats.Ratings[gamedata.CRExpertise])
 	in := combat.MeleeSpellInput{
 		AttackerSkill:  skill,
 		VictimMaxSkill: vlevel * 5,
@@ -268,10 +275,10 @@ func (h *Handler) meleeSpellInput(s *Session, info *gamedata.SpellInfo, v creatu
 		Ranged:         ranged,
 		FromBehind:     !combat.HasInArc(v.x, v.y, v.o, p.X, p.Y, math.Pi),
 		VictimNoParry:  v.info.ExtraFlags&extraNoParry != 0,
-		DodgePct:       5,
+		DodgePct:       5 - exp,
 	}
 	if v.info.Type == creatureTypeHumanoid {
-		in.ParryPct = 5
+		in.ParryPct = 5 - exp
 	}
 	return in
 }
@@ -377,6 +384,7 @@ func (h *Handler) spellCritChance(s *Session, info *gamedata.SpellInfo, v creatu
 			return 0
 		}
 		chance = h.Data.SpellCritFromIntellect(uint32(p.Class), uint32(p.Level), p.Stats.Attributes[3])
+		chance += h.Data.RatingBonus(gamedata.CRCritSpell, uint32(p.Level), p.Stats.Ratings[gamedata.CRCritSpell])
 		chance += float32(auras.Total(aura.ModSpellCritChance))
 		chance += float32(auras.TotalByMisc(aura.ModSpellCritChanceSchool, info.SchoolMask))
 		chance += float32(foe.Total(aura.ModAttackerSpellCritChance))
@@ -393,7 +401,7 @@ func (h *Handler) spellCritChance(s *Session, info *gamedata.SpellInfo, v creatu
 func (h *Handler) meleeCritChance(s *Session, v creatureView, foe *aura.Set) float32 {
 	p := s.player
 	level := uint32(p.Level)
-	crit := h.Data.MeleeCritFromAgility(uint32(p.Class), level, p.Stats.Attributes[1])
+	crit := h.Data.MeleeCritFromAgility(uint32(p.Class), level, p.Stats.Attributes[1]) + h.Data.RatingBonus(gamedata.CRCritMelee, level, p.Stats.Ratings[gamedata.CRCritMelee])
 	if s.spells != nil {
 		crit += float32(s.spells.auras.Total(aura.ModCritPercent))
 	}

@@ -86,6 +86,26 @@ func InitialSelfUpdate(p *character.Player, data *gamedata.Catalog, clock uint32
 	fields[f.UNIT_FIELD_ATTACK_POWER] = uint32(stats.AttackPower)
 	fields[f.UNIT_FIELD_RANGED_ATTACK_POWER] = uint32(stats.RangedAttackPower)
 	fields[f.PLAYER_SHIELD_BLOCK] = stats.ShieldBlock
+	// Combat ratings (PLAYER_FIELD_COMBAT_RATING_1 + cr) and the derived
+	// sheet percentages (StatSystem.cpp): the client converts the rating
+	// points to hit/expertise/resilience percentages itself via
+	// gtCombatRatings; the percentage fields are shown as sent.
+	for cr, v := range stats.Ratings {
+		if v != 0 {
+			fields[f.PLAYER_FIELD_COMBAT_RATING_1+cr] = uint32(v)
+		}
+	}
+	fields[f.PLAYER_BLOCK_PERCENTAGE] = math.Float32bits(stats.BlockPct)
+	fields[f.PLAYER_DODGE_PERCENTAGE] = math.Float32bits(stats.DodgePct)
+	fields[f.PLAYER_PARRY_PERCENTAGE] = math.Float32bits(stats.ParryPct)
+	fields[f.PLAYER_EXPERTISE] = uint32(stats.Expertise)
+	fields[f.PLAYER_OFFHAND_EXPERTISE] = uint32(stats.Expertise)
+	fields[f.PLAYER_CRIT_PERCENTAGE] = math.Float32bits(stats.CritPct)
+	fields[f.PLAYER_RANGED_CRIT_PERCENTAGE] = math.Float32bits(stats.RangedCritPct)
+	fields[f.PLAYER_OFFHAND_CRIT_PERCENTAGE] = math.Float32bits(stats.OffhandCritPct)
+	for i, v := range stats.SpellCritPct {
+		fields[f.PLAYER_SPELL_CRIT_PERCENTAGE1+i] = math.Float32bits(v)
+	}
 	_, _, mpSpirit := data.RegenRatios(uint32(p.Class), uint32(p.Level))
 	manaRegen, manaRegenInt := regen.ManaRegenValues(stats.Attributes[3], stats.Attributes[4], mpSpirit)
 	fields[f.PLAYER_FIELD_MOD_MANA_REGEN] = math.Float32bits(manaRegen)

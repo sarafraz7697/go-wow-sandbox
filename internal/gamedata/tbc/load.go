@@ -256,6 +256,9 @@ func loadClient(ctx context.Context, dir string, locale int) (gamedata.ClientDat
 	data.SpellCritRatio = loadGameTable(dir, "gtChanceToSpellCrit")
 	data.RegenHPSpirit = loadGameTable(dir, "gtRegenHPPerSpt")
 	data.RegenMPSpirit = loadGameTable(dir, "gtRegenMPPerSpt")
+	// gtCombatRatings feeds the rating-to-percent conversions of
+	// Player::GetRatingMultiplier (crit/hit/expertise/resilience sheet values).
+	data.CombatRatings = loadGameTable(dir, "gtCombatRatings")
 	return data, nil
 }
 

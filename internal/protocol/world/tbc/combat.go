@@ -53,7 +53,7 @@ const (
 )
 
 // weaponSkills is item_weapon_skills[] of Item::GetSkill by weapon subclass.
-var weaponSkills = [21]uint32{44, 172, 45, 46, 54, 160, 229, 43, 55, 0, 136, 0, 0, skillUnarmed, 0, 173, 176, 253, 226, 228, 356}
+var weaponSkills = gamedata.ItemWeaponSkills
 
 // Team ids of ChrRaces.BaseLanguage (Player::TeamForRace).
 const (
@@ -417,14 +417,26 @@ func (h *Handler) meleeSwing(s *Session, v creatureView, now time.Time) {
 	vic := combat.Side{Level: vlevel, Defense: vlevel * 5, MaxSkill: vlevel * 5, Armor: h.victimArmor(v, h.foeSet(s, v)),
 		NoParry: v.info.ExtraFlags&extraNoParry != 0, NoBlock: v.info.ExtraFlags&extraNoBlock != 0, NoCrush: v.info.ExtraFlags&extraNoCrush != 0}
 	crit := h.Data.MeleeCritFromAgility(uint32(p.Class), level, p.Stats.Attributes[1]) + float32(s.sp().auras.Total(aura.ModCritPercent))
+	// Player::UpdateMeleeHitChances: the hit rating lowers the miss chance;
+	// UpdateCritPercentage folds the crit rating into the sheet value the
+	// reference rolls with; expertise lowers the victim's dodge/parry
+	// chances (RollMeleeOutcomeAgainst).
+	rb := func(cr uint32) float32 { return h.Data.RatingBonus(cr, level, p.Stats.Ratings[cr]) }
+	miss := combat.MissChance(weaponSkill, vic.Defense, false) - rb(gamedata.CRHitMelee)
 	chances := combat.Chances{
-		Miss:  int32(combat.MissChance(weaponSkill, vic.Defense, false) * 100),
-		Crit:  int32(combat.CritChance(crit, att.MaxSkill, vic.Defense) * 100),
+		Miss:  int32(max(miss, 0) * 100),
+		Crit:  int32(combat.CritChance(crit+rb(gamedata.CRCritMelee), att.MaxSkill, vic.Defense) * 100),
 		Dodge: 500,
 		Block: 500,
 	}
 	if v.info.Type == creatureTypeHumanoid {
 		chances.Parry = 500
+	}
+	if exp := int32(rb(gamedata.CRExpertise) * 100); exp > 0 {
+		chances.Dodge -= exp
+		if chances.Parry > 0 {
+			chances.Parry -= exp
+		}
 	}
 	fromBehind := !combat.HasInArc(v.x, v.y, v.o, p.X, p.Y, math.Pi)
 	caster := false
