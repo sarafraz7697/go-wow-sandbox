@@ -27,6 +27,22 @@ func (c *Catalog) ItemPrototype(id uint32) (entity.ItemPrototype, bool) {
 	return v, ok
 }
 
+// SetItemPrototypesForTest installs the item_template table (tests).
+func (c *Catalog) SetItemPrototypesForTest(m map[uint32]entity.ItemPrototype) {
+	c.itemPrototypes = make(map[uint32]entity.ItemPrototype, len(m))
+	for k, v := range m {
+		c.itemPrototypes[k] = v
+	}
+}
+
+// SetEnchantmentsForTest installs the SpellItemEnchantment table (tests).
+func (c *Catalog) SetEnchantmentsForTest(m map[uint32]Enchantment) {
+	c.enchantments = make(map[uint32]Enchantment, len(m))
+	for k, v := range m {
+		c.enchantments[k] = v
+	}
+}
+
 // Quest returns a loaded quest_template entity.
 func (c *Catalog) Quest(id uint32) (*entity.Quest, bool) {
 	v, ok := c.quests[id]

@@ -226,7 +226,7 @@ func (s *Store) ReleasePlayer(ctx context.Context, accountID uint64, p *characte
 	}
 	var result sql.Result
 	if p.Entered {
-		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=?,health=?,power1=?,power2=?,power3=?,power4=?,power5=?,money=?,cinematic=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.Health, p.Mana, p.Rage, p.Focus, p.Energy, p.Happiness, p.Money, p.Cinematic, p.GUID, accountID)
+		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~?,position_x=?,position_y=?,position_z=?,orientation=?,map=?,zone=?,health=?,power1=?,power2=?,power3=?,power4=?,power5=?,money=?,cinematic=?,playerFlags=? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.X, p.Y, p.Z, p.Orientation, p.Map, p.Zone, p.Health, p.Mana, p.Rage, p.Focus, p.Energy, p.Happiness, p.Money, p.Cinematic, p.PlayerFlags, p.GUID, accountID)
 	} else {
 		result, err = tx.ExecContext(ctx, `UPDATE characters SET online=0,logout_time=UNIX_TIMESTAMP(),totaltime=LEAST(totaltime+?,4294967295),leveltime=LEAST(leveltime+?,4294967295),at_login=at_login & ~? WHERE guid=? AND account=? AND online=1`, seconds, seconds, clear, p.GUID, accountID)
 	}

@@ -43,6 +43,14 @@ type Session struct {
 	combat                     combatState          // combat.go: melee target and swing timer
 	slowAt                     time.Time            // next slow (250 ms) tick work
 	sitting                    bool                 // Unit stand state != stand (regen x1.5)
+	sheath                     uint8                // SheathState (UNIT_FIELD_BYTES_2 byte 0)
+	bytes2                     uint32               // cached UNIT_FIELD_BYTES_2 word
+	bytes1                     uint32               // cached UNIT_FIELD_BYTES_1 word
+	fieldBytes                 uint32               // cached PLAYER_FIELD_BYTES word
+	pendingResurrect           uint64               // guid of the pending resurrect offer
+	pvpInbox                   chan pvpEvent        // this player's cross-session combat inbox
+	combatUntil                time.Time            // combat window (UNIT_FLAG_IN_COMBAT)
+	unitFlags                  uint32               // cached UNIT_FIELD_FLAGS word
 	inv                        *inventory.Inventory // live inventory (inventory.go)
 	loadedItems                map[uint32]struct{}  // item guids present at login
 	allocatedItems             []uint32             // guids reserved during the session

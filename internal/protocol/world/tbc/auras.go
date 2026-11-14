@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"wowserver/internal/domain/aura"
+	"wowserver/internal/domain/combat"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/world/tbc/codec"
 	f "wowserver/internal/protocol/world/tbc/updatefields"
@@ -21,6 +22,21 @@ func (h *Handler) addAura(s *Session, now time.Time, st *castState, effects [3]*
 	sp := s.sp()
 	info := st.info
 	positive := effectsPositive(effects)
+	// Applying a form removes the previous one (stance switching).
+	for _, e := range effects {
+		if e != nil && e.Name == aura.ModShapeshift {
+			for _, hd := range sp.auras.Holders() {
+				if hd.SpellID != info.ID {
+					for _, oe := range hd.Effects {
+						if oe != nil && oe.Name == aura.ModShapeshift {
+							sp.auras.Remove(hd.Slot)
+							break
+						}
+					}
+				}
+			}
+		}
+	}
 	duration := h.Data.DurationMS(info)
 	hd := aura.NewHolder(info.ID, uint64(s.player.GUID), uint8(s.player.Level), duration, positive, effects)
 	hd.InterruptFlags = info.AuraInterruptFlags
@@ -124,11 +140,45 @@ func (h *Handler) auraTick(s *Session, now time.Time) {
 		eff := e.Holder.Effects[e.Effect]
 		amount := uint32(max(eff.Amount, 0))
 		switch eff.Name {
+		case aura.PeriodicDamage:
+			if p.Health == 0 || p.PlayerFlags&playerFlagsGhost != 0 {
+				continue
+			}
+			info := h.Data.Spell(e.Holder.SpellID)
+			if info == nil {
+				continue
+			}
+			h.unitInCombat(s, now)
+			damage := eff.Amount
+			if damage < 0 {
+				damage = 0
+			}
+			d := spellDamage{damage: uint32(damage)}
+			if d.damage > 0 && info.SchoolMask&schoolMaskNormal != 0 {
+				d.damage = combat.ArmorReduced(uint32(e.Holder.Level), p.Stats.Resistances[0], d.damage)
+			}
+			if info.SchoolMask&schoolMaskNormal == 0 && d.damage > 0 {
+				res := int32(0)
+				for school := 1; school < 7; school++ {
+					if info.SchoolMask&(1<<school) != 0 {
+						res = int32(p.Stats.Resistances[school])
+						break
+					}
+				}
+				d.resist = combat.ResistedDamage(rng{}, float32(res), uint32(p.Level), d.damage, true)
+				d.damage -= d.resist
+			}
+			h.sendToSet(s, codec.PeriodicDamageLog(caster, e.Holder.Caster, e.Holder.SpellID, d.damage, info.SchoolMask, d.absorb, d.resist))
+			if d.damage > 0 {
+				p.Health = sub(p.Health, d.damage)
+				h.sendFields(s, codec.FieldChange{Index: f.UNIT_FIELD_HEALTH, Value: p.Health})
+				h.checkPlayerDeath(s, e.Holder.Caster, now)
+			}
 		case aura.PeriodicHeal:
 			if p.Health == 0 {
 				continue
 			}
-			_ = s.send(codec.PeriodicHealLog(caster, e.Holder.Caster, e.Holder.SpellID, amount))
+			h.sendToSet(s, codec.PeriodicHealLog(caster, e.Holder.Caster, e.Holder.SpellID, amount))
 			if np := min(p.Health+amount, p.Stats.MaxHealth); np != p.Health {
 				p.Health = np
 				h.sendFields(s, codec.FieldChange{Index: f.UNIT_FIELD_HEALTH, Value: np})
@@ -141,7 +191,7 @@ func (h *Handler) auraTick(s *Session, now time.Time) {
 			if rs.MaxPower[eff.Misc] == 0 {
 				continue
 			}
-			_ = s.send(codec.PeriodicEnergizeLog(caster, e.Holder.Caster, e.Holder.SpellID, uint32(eff.Misc), amount))
+			h.sendToSet(s, codec.PeriodicEnergizeLog(caster, e.Holder.Caster, e.Holder.SpellID, uint32(eff.Misc), amount))
 			h.setPower(s, int(eff.Misc), min(rs.Power[eff.Misc]+amount, rs.MaxPower[eff.Misc]))
 		}
 	}

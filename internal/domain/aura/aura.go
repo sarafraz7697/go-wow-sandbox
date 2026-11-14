@@ -39,6 +39,16 @@ const (
 	ModIncreaseEnergy                = 35
 	ModPowerRegenPercent             = 110
 	ModRegenDuringCombat             = 116
+	ModShapeshift                    = 36
+	Ghost                            = 95
+	ModAttackPower                   = 99
+	ModResistancePct                 = 101
+	ModRangedAttackPower             = 124
+	ModIncreaseHealthPercent         = 133
+	ModTotalStatPercentage           = 137
+	ModAttackPowerPct                = 166
+	ModRangedAttackPowerPct          = 167
+	ModRating                        = 189
 )
 
 // Effect is one Aura of a holder (one per spell effect index).
@@ -192,12 +202,21 @@ func (s *Set) Update(diff int32) []Event {
 	return ev
 }
 
-// StatMods is the sum of stat related aura effects.
+// StatMods is the sum of stat related aura effects. Percent fields hold
+// the multiplier form (1 = unchanged).
 type StatMods struct {
-	Pos, Neg  [5]uint32
-	Resist    [7]int32
-	MaxHealth int32
-	MaxEnergy int32
+	Pos, Neg             [5]uint32
+	Resist               [7]int32
+	MaxHealth            int32
+	MaxEnergy            int32
+	AttackPower          int32
+	RangedAttackPower    int32
+	StatPct              [5]float32
+	ResistPct            [7]float32
+	MaxHealthPct         float32
+	AttackPowerPct       float32
+	RangedAttackPowerPct float32
+	Ratings              [24]int32
 }
 
 // StatMods ports the HandleAuraModStat / ModResistance / ModIncrease* sums.
@@ -219,7 +238,7 @@ func (s *Set) StatMods() StatMods {
 				continue
 			}
 			switch e.Name {
-			case ModStat:
+			case ModStat: // misc is the stat index, negative = every stat
 				if e.Misc < 0 {
 					for i := 0; i < 5; i++ {
 						addStat(i, e.Amount)
@@ -238,6 +257,34 @@ func (s *Set) StatMods() StatMods {
 			case ModIncreaseEnergy:
 				if e.Misc == 3 {
 					m.MaxEnergy += e.Amount
+				}
+			case ModAttackPower:
+				m.AttackPower += e.Amount
+			case ModRangedAttackPower:
+				m.RangedAttackPower += e.Amount
+			case ModAttackPowerPct:
+				m.AttackPowerPct = mulPct(m.AttackPowerPct, e.Amount)
+			case ModRangedAttackPowerPct:
+				m.RangedAttackPowerPct = mulPct(m.RangedAttackPowerPct, e.Amount)
+			case ModTotalStatPercentage: // misc is the stat index, -1 = every stat
+				for i := 0; i < 5; i++ {
+					if e.Misc < 0 || e.Misc == int32(i) {
+						m.StatPct[i] = mulPct(m.StatPct[i], e.Amount)
+					}
+				}
+			case ModIncreaseHealthPercent:
+				m.MaxHealthPct = mulPct(m.MaxHealthPct, e.Amount)
+			case ModResistancePct:
+				for sc := 0; sc < 7; sc++ {
+					if e.Misc < 0 || e.Misc&(1<<sc) != 0 {
+						m.ResistPct[sc] = mulPct(m.ResistPct[sc], e.Amount)
+					}
+				}
+			case ModRating:
+				for cr := 0; cr < 24; cr++ {
+					if e.Misc < 0 || e.Misc&(1<<cr) != 0 {
+						m.Ratings[cr] += e.Amount
+					}
 				}
 			}
 		}
@@ -274,6 +321,11 @@ func mulOne(v float32) float32 {
 		return 1
 	}
 	return v
+}
+
+// mulPct folds one percent modifier into the multiplier form.
+func mulPct(v float32, amount int32) float32 {
+	return mulOne(v) * (100 + float32(amount)) / 100
 }
 
 // Total is Unit::GetTotalAuraModifier: the sum of the amounts of every effect

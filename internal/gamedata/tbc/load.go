@@ -316,6 +316,7 @@ func readSpellInfo(r *record) gamedata.SpellInfo {
 		s.TriggerSpell[i] = c(116 + i)
 		s.EffectMechanic[i] = c(83 + i)
 		s.EffectChainTargets[i] = c(104 + i)
+		s.EffectPointsPerCombo[i] = r.f32((119 + i) * 4)
 	}
 	return s
 }

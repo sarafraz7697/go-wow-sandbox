@@ -109,6 +109,11 @@ func (h *Handler) refreshVisibility(s *Session) {
 		}
 		resolved.X, resolved.Y, resolved.Z, resolved.Orientation = x, y, z, o
 		_ = s.send(codec.CreateObjectForCreature(resolved, clock))
+		// Auras other players put on the creature: the create block has no
+		// aura words, so the current state follows as a values update.
+		if ch := h.creatureAuraWords(guid); len(ch) > 0 {
+			_ = s.send(codec.ValuesUpdate(guid, ch))
+		}
 		created++
 	}
 

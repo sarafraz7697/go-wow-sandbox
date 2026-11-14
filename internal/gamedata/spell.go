@@ -38,6 +38,7 @@ type SpellInfo struct {
 	EquippedItemInvTypes        int32
 	EffectMechanic              [3]uint32
 	EffectChainTargets          [3]uint32
+	EffectPointsPerCombo        [3]float32
 	SpellIconID                 uint32
 	MaxTargetLevel              uint32
 	SpellClassSet               uint32
@@ -67,18 +68,26 @@ const (
 	AuraInterruptNotSeated = 0x00040000
 )
 
-// Spell effects and aura names this server evaluates.
+// Spell effects and aura names this server evaluates (SpellEffects of
+// SharedDefines.h, 2.4.3 ids).
 const (
+	EffectInstakill            = 1
 	EffectSchoolDamage         = 2
-	EffectWeaponDamageNoSchool = 17
-	EffectWeaponPercentDamage  = 31
-	EffectNormalizedWeaponDmg  = 58
-	EffectWeaponDamage         = 121
-	EffectApplyAura            = 6
+	EffectDummy                = 3
 	EffectTeleportUnits        = 5
-	EffectScriptEffect         = 77
+	EffectApplyAura            = 6
+	EffectLeap                 = 29
 	EffectHeal                 = 10
 	EffectEnergize             = 30
+	EffectWeaponDamageNoSchool = 17
+	EffectWeaponPercentDamage  = 31
+	EffectInterruptCast        = 68
+	EffectWeaponDamage         = 58
+	EffectScriptEffect         = 77
+	EffectAddComboPoints       = 80
+	EffectHealPct              = 136
+	EffectEnergizePct          = 137
+	EffectNormalizedWeaponDmg  = 121
 
 	AuraPeriodicDamage       = 3
 	AuraPeriodicHeal         = 8

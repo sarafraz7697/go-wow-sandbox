@@ -275,6 +275,78 @@ func PeriodicEnergizeLog(target, caster uint64, spell, power, amount uint32) wor
 	})
 }
 
+// UpdateComboPoints is Player::SendComboPoints (SMSG_UPDATE_COMBO_POINTS).
+func UpdateComboPoints(target uint64, points uint8) world.Packet {
+	return build(op.SMSG_UPDATE_COMBO_POINTS, 10, func(w *wire.Writer) {
+		w.PackedGUID(target)
+		w.Uint8(points)
+	})
+}
+
+// DeathReleaseLoc is SMSG_DEATH_RELEASE_LOC: the spirit healer position on
+// the minimap (map -1 clears it, Player::RepopAtGraveyard/ResurrectPlayer).
+func DeathReleaseLoc(mapID uint32, x, y, z float32) world.Packet {
+	return build(op.SMSG_DEATH_RELEASE_LOC, 16, func(w *wire.Writer) {
+		w.Uint32(mapID)
+		w.Float32(x)
+		w.Float32(y)
+		w.Float32(z)
+	})
+}
+
+// DeathReleaseLocClear removes the spirit healer marker.
+func DeathReleaseLocClear() world.Packet {
+	return build(op.SMSG_DEATH_RELEASE_LOC, 16, func(w *wire.Writer) {
+		w.Uint32(0xFFFFFFFF)
+		w.Float32(0)
+		w.Float32(0)
+		w.Float32(0)
+	})
+}
+
+// ResurrectRequest is Spell::SendResurrectRequest (SMSG_RESURRECT_REQUEST):
+// the caster guid, the name length, the name, a zero byte and the is-npc flag.
+func ResurrectRequest(caster uint64, name string, isNPC bool) world.Packet {
+	return build(op.SMSG_RESURRECT_REQUEST, 15+len(name), func(w *wire.Writer) {
+		w.Uint64(caster)
+		w.Uint32(uint32(len(name)) + 1)
+		w.CString(name, 256)
+		w.Uint8(0)
+		if isNPC {
+			w.Uint8(1)
+		} else {
+			w.Uint8(0)
+		}
+	})
+}
+
+// CooldownEntry is one (spell, remaining ms) pair of SMSG_SPELL_COOLDOWN.
+type CooldownEntry struct {
+        Spell  uint32
+        Remain uint32
+}
+
+// SpellCooldownPacket is the SMSG_SPELL_COOLDOWN form of Player::
+// ProhibitSpellSchool: full guid, flags byte, then (spell, ms) pairs.
+func SpellCooldownPacket(guid uint64, entries []CooldownEntry) world.Packet {
+        return build(op.SMSG_SPELL_COOLDOWN, 9+len(entries)*8, func(w *wire.Writer) {
+                w.Uint64(guid)
+                w.Uint8(0) // flags: 0x1 pet, 0x2 unk
+                for _, e := range entries {
+                        w.Uint32(e.Spell)
+                        w.Uint32(e.Remain)
+                }
+        })
+}
+
+// ClearCooldownPacket is Player::SendClearCooldown (SMSG_CLEAR_COOLDOWN).
+func ClearCooldownPacket(spell uint32, guid uint64) world.Packet {
+        return build(op.SMSG_CLEAR_COOLDOWN, 12, func(w *wire.Writer) {
+                w.Uint32(spell)
+                w.Uint64(guid)
+        })
+}
+
 // UpdateAuraDuration and SetExtraAuraInfo are SpellAuraHolder::UpdateAuraDuration.
 func UpdateAuraDuration(slot uint8, ms uint32) world.Packet {
 	return build(op.SMSG_UPDATE_AURA_DURATION, 5, func(w *wire.Writer) { w.Uint8(slot); w.Uint32(ms) })

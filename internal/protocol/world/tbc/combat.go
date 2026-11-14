@@ -12,6 +12,7 @@ import (
 	"wowserver/internal/domain/combat"
 	domainworld "wowserver/internal/domain/world"
 	"wowserver/internal/domain/spell"
+	"wowserver/internal/entity"
 	"wowserver/internal/gamedata"
 	"wowserver/internal/protocol/wire"
 	"wowserver/internal/protocol/world"
@@ -173,6 +174,7 @@ func (rng) Norm() float32 { return rand.Float32() }
 func (h *Handler) registerCombatRoutes(add func(uint32, handlerFunc)) {
 	add(op.CMSG_ATTACKSWING, h.attackSwing)
 	add(op.CMSG_ATTACKSTOP, h.attackStopHandler)
+	add(op.CMSG_SETSHEATHED, h.setSheathed)
 }
 
 // creatureView is a resolved, live creature as combat sees it.
@@ -244,19 +246,27 @@ func (h *Handler) attackSwing(_ context.Context, s *Session, pk world.Packet) (*
 	if p == nil || !p.Entered {
 		return nil, nil
 	}
+	if p.PlayerFlags&playerFlagsGhost != 0 {
+		return nil, nil // the dead cannot attack
+	}
 	now := time.Now()
-	// Player victims (PvP): validate the team like the reference does, then
-	// stop the attack — cross-session player combat (damage, death, release)
-	// is not implemented yet. Player guids are low guids, so a zero high part
-	// that no creature matches is another player.
+	// Player victims (PvP): the team rules decide (opposing teams are
+	// attackable while both are PvP flagged - every player of this server is).
+	// Player guids are low guids, so a zero high part that no creature matches
+	// is another player.
 	if guid>>32 == 0 {
 		if hostile, found := h.playerTargetHostility(s, guid); found {
 			if !hostile {
 				s.log.Debug("attack on same-team player rejected", "target", guid)
-			} else {
-				h.warnOnce(s, pvpNotImplementedKey, "player-versus-player combat is not implemented; attack rejected", 0, 0)
+				_ = s.send(attackStopPacket(uint64(p.GUID), guid))
+				return nil, nil
 			}
-			_ = s.send(attackStopPacket(uint64(p.GUID), guid))
+			snap, ok := h.pvpLookup(uint32(guid))
+			if !ok || snap.ghost || snap.health == 0 {
+				_ = s.send(attackStopPacket(uint64(p.GUID), guid))
+				return nil, nil
+			}
+			h.attackPlayer(s, guid, now)
 			return nil, nil
 		}
 	}
@@ -277,6 +287,93 @@ func (h *Handler) attackSwing(_ context.Context, s *Session, pk world.Packet) (*
 func (h *Handler) attackStopHandler(_ context.Context, s *Session, _ world.Packet) (*world.Packet, error) {
 	h.attackStop(s, false)
 	return nil, nil
+}
+
+// Sheath states (SheathState, Unit.h).
+const (
+	sheathUnarmed  = 0
+	sheathMelee    = 1
+	sheathRanged   = 2
+	maxSheathState = 3
+)
+
+// unitBytes2Base is the UNIT_FIELD_BYTES_2 word players spawn with (InitialSelf
+// -Update/CreateObjectForObserver): byte 1 carries 0x28, byte 0 is the sheath.
+const unitBytes2Base = 0x2800
+
+// CMSG_SETSHEATHED: uint32 sheathed (HandleSetSheathedOpcode).
+func (h *Handler) setSheathed(_ context.Context, s *Session, pk world.Packet) (*world.Packet, error) {
+	r := wire.NewReader(pk.Payload)
+	sheathed := r.Uint32()
+	if err := r.Finish(); err != nil {
+		return nil, err
+	}
+	if sheathed > maxSheathState {
+		return nil, nil // unknown sheath state: the reference only logs
+	}
+	if s.player == nil || !s.player.Entered {
+		return nil, nil
+	}
+	h.setSheath(s, uint8(sheathed))
+	return nil, nil
+}
+
+// setSheath ports Player::SetSheath: byte 0 of UNIT_FIELD_BYTES_2 plus the
+// virtual weapon slots (Player::SetVirtualItemSlot field writes, encoding of
+// Creature::SetVirtualItem) so observers see the drawn weapons change.
+func (h *Handler) setSheath(s *Session, sheathed uint8) {
+	s.sheath = sheathed
+	s.bytes2 = unitBytes2Base | uint32(sheathed)
+	ch := []codec.FieldChange{{Index: f.UNIT_FIELD_BYTES_2, Value: s.bytes2}}
+	ch = append(ch, h.virtualItemChanges(s, sheathed)...)
+	h.sendToSet(s, codec.ValuesUpdate(uint64(s.player.GUID), ch))
+}
+
+// weaponItemAt returns the weapon prototype equipped in an equipment slot.
+func (h *Handler) weaponItemAt(s *Session, slot uint8) *entity.ItemPrototype {
+	for _, it := range s.player.Items {
+		if it.Bag != 0 || it.Slot != slot {
+			continue
+		}
+		if d, ok := h.Data.ItemPrototype(it.Entry); ok && d.Class == 2 {
+			proto := d
+			return &proto
+		}
+	}
+	return nil
+}
+
+// virtualItemChanges builds the UNIT_VIRTUAL_ITEM_SLOT_DISPLAY/INFO field
+// changes of one sheath transition.
+func (h *Handler) virtualItemChanges(s *Session, sheathed uint8) []codec.FieldChange {
+	var ch []codec.FieldChange
+	set := func(virtual int, slot uint8) {
+		var display, info0, info1 uint32
+		if d := h.weaponItemAt(s, slot); d != nil {
+			display = d.DisplayInfoID
+			info0 = d.Class | d.SubClass<<8 | d.Unk0<<16 | uint32(d.Material)<<24
+			info1 = d.InventoryType | d.Sheath<<8
+		}
+		ch = append(ch,
+			codec.FieldChange{Index: f.UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + virtual, Value: display},
+			codec.FieldChange{Index: f.UNIT_VIRTUAL_ITEM_INFO + virtual*2, Value: info0},
+			codec.FieldChange{Index: f.UNIT_VIRTUAL_ITEM_INFO + virtual*2 + 1, Value: info1})
+	}
+	switch sheathed {
+	case sheathMelee:
+		set(0, 15) // main hand
+		set(1, 16) // off hand
+		set(2, 0)
+	case sheathRanged:
+		set(0, 0)
+		set(1, 0)
+		set(2, 17) // ranged
+	default: // SHEATH_STATE_UNARMED: nothing prepared
+		set(0, 0)
+		set(1, 0)
+		set(2, 0)
+	}
+	return ch
 }
 
 // creatureFriendlyOrUnattackable: IsFriendlyTo || NON_ATTACKABLE|NOT_SELECTABLE.
@@ -320,7 +417,8 @@ func (h *Handler) attackStop(s *Session, targetSwitch bool) {
 	if old := s.sp().melee; old != nil { // InterruptSpell(CURRENT_MELEE_SPELL)
 		s.sp().melee = nil
 		caster := uint64(s.player.GUID)
-		_ = s.send(codec.SpellFailure(caster, old.info.ID, 0), codec.SpellFailedOther(caster, old.info.ID))
+		h.sendToSet(s, codec.SpellFailure(caster, old.info.ID, 0))
+		h.sendToSet(s, codec.SpellFailedOther(caster, old.info.ID))
 		_ = s.send(codec.CastFailed(old.info.ID, spell.FailedInterrupted, old.count))
 	}
 	*c = combatState{nextSwing: c.nextSwing}
@@ -354,6 +452,11 @@ func (h *Handler) combatTick(s *Session, now time.Time) {
 	c := &s.combat
 	p := s.player
 	if !c.active || p == nil || p.Stats == nil {
+		return
+	}
+	// Player victims fight through the shared pvp registry.
+	if c.victim>>32 == 0 && c.victim != uint64(p.GUID) {
+		h.combatTickPlayer(s, now)
 		return
 	}
 	v, ok := h.lookupCreature(s, c.victim, now)
@@ -402,6 +505,9 @@ func (h *Handler) combatTick(s *Session, now time.Time) {
 // combatStopVictimGone is Unit::CombatStop for an attacker whose victim died
 // or vanished: AttackStop plus SMSG_CANCEL_COMBAT.
 func (h *Handler) combatStopVictimGone(s *Session) {
+	if s.spells != nil && s.spells.comboTarget == s.combat.victim {
+		h.clearComboPoints(s) // Player::ClearComboPoints when the target died
+	}
 	h.attackStop(s, false)
 	_ = s.send(world.Packet{Opcode: op.SMSG_CANCEL_COMBAT})
 }
@@ -621,6 +727,10 @@ func (h *Handler) tickCreatureLife(now time.Time) {
 		if !c.hidden {
 			h.broadcastCreature(c.spawn, codec.DestroyObjectGUID(guid), now)
 		}
+		// The respawned creature starts without auras.
+		h.creatureAuras.mu.Lock()
+		delete(h.creatureAuras.m, c.spawn.GUID)
+		h.creatureAuras.mu.Unlock()
 		if h.Data == nil {
 			continue
 		}

@@ -65,6 +65,15 @@ func EffectValue(s *gamedata.SpellInfo, i int, casterLevel uint32, rnd func(lo, 
 	return basePoints
 }
 
+// ComboScaled adds the EffectPointsPerCombo part of Unit::
+// CalculateSpellDamage: finisher damage scales with the spent combo points.
+func ComboScaled(s *gamedata.SpellInfo, i int, value int32, comboPoints int32) int32 {
+	if s.EffectPointsPerCombo[i] != 0 && comboPoints > 0 {
+		value += int32(s.EffectPointsPerCombo[i] * float32(comboPoints))
+	}
+	return value
+}
+
 // PowerCost ports Spell::CalculatePowerCost for a spell cast by a player
 // without an item and without spell mods. createHealth/createMana stand for
 // GetCreateHealth/GetCreateMana (the level base values).

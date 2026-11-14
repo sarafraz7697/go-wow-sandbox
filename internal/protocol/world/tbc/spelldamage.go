@@ -87,16 +87,18 @@ func (h *Handler) enemyTarget(s *Session, st *castState, now time.Time) (creatur
 	if st.targets.Mask&(codec.TargetFlagUnit|codec.TargetFlagUnk2) == 0 {
 		return v, spell.FailedBadTargets
 	}
-	// Player victims (PvP): the reference validates hostility at cast time;
-	// hostile player targets are rejected here because cross-session player
-	// combat is not implemented yet (same rule as the melee path).
+	// Player victims (PvP): friendly players cannot be hit by hostile
+	// effects; hostile players resolve through the pvp registry in
+	// checkSpellTarget (a miss here means the target is out of sight).
 	if st.targets.Unit>>32 == 0 && st.targets.Unit != uint64(s.player.GUID) {
 		if hostile, found := h.playerTargetHostility(s, st.targets.Unit); found {
 			if !hostile {
 				return v, spell.FailedTargetFriendly
 			}
-			h.warnOnce(s, pvpNotImplementedKey, "player-versus-player spells are not implemented; cast rejected", 0, 0)
-			return v, spell.FailedBadTargets
+			if _, ok := h.pvpLookup(uint32(st.targets.Unit)); !ok {
+				return v, spell.FailedBadTargets
+			}
+			return v, spell.CastOK
 		}
 	}
 	v, ok := h.lookupCreature(s, st.targets.Unit, now)
@@ -119,11 +121,29 @@ func (h *Handler) enemyTarget(s *Session, st *castState, now time.Time) (creatur
 // hostility, range, facing and combo points. strict is the prepare-time call.
 func (h *Handler) checkSpellTarget(s *Session, now time.Time, st *castState, strict bool) uint8 {
 	info, p := st.info, s.player
-	if info.Attributes&(gamedata.SpellAttrExReqTargetComboPoints) != 0 || info.AttributesEx&(gamedata.SpellAttrExReqTargetComboPoints|gamedata.SpellAttrExReqComboPoints) != 0 {
-		return spell.FailedNoComboPoints // combo points are not simulated yet
+	if info.Attributes&gamedata.SpellAttrExReqTargetComboPoints != 0 || info.AttributesEx&(gamedata.SpellAttrExReqTargetComboPoints|gamedata.SpellAttrExReqComboPoints) != 0 {
+		sp := s.sp()
+		if sp.comboTarget != st.targets.Unit || sp.comboPoints == 0 {
+			return spell.FailedNoComboPoints
+		}
 	}
 	if !spellHasEnemyEffect(info) {
 		return spell.CastOK
+	}
+	// Hostile player victims (PvP).
+	if st.targets.Unit != uint64(p.GUID) && st.targets.Unit>>32 == 0 {
+		if snap, ok := h.pvpLookup(uint32(st.targets.Unit)); ok {
+			if race, rk := h.Data.Race(uint32(p.Race)); rk && !playerHostileToPlayer(race.Team, snap.team) {
+				return spell.FailedTargetFriendly
+			}
+			if snap.mapID != p.Map || snap.ghost || snap.health == 0 {
+				return spell.FailedTargetsDead
+			}
+			if res := h.checkSpellTargetPlayer(s, st, snap, strict); res != spell.CastOK {
+				return res
+			}
+			return spell.CastOK
+		}
 	}
 	v, res := h.enemyTarget(s, st, now)
 	if res != spell.CastOK {
@@ -155,6 +175,58 @@ func (h *Handler) checkSpellTarget(s *Session, now time.Time, st *castState, str
 			break
 		}
 		// CombatDistanceBetween (not for melee range): centres minus both reaches.
+		dist := centres - reach
+		if dist < 0 {
+			dist = 0
+		}
+		maxRange := rg.Max
+		if strict {
+			maxRange += rangeLeeway
+		} else {
+			maxRange += rangeLeewayCast
+		}
+		if dist > maxRange {
+			return spell.FailedOutOfRange
+		}
+		if rg.Min > 0 && dist < rg.Min {
+			return spell.FailedTooClose
+		}
+	}
+	if info.FacingCasterFlags&facingFlagInFront != 0 && !combat.HasInArc(p.X, p.Y, p.Orientation, v.x, v.y, math.Pi) {
+		return spell.FailedUnitNotInfront
+	}
+	return spell.CastOK
+}
+
+// checkSpellTargetPlayer is the range/facing part of CheckCast against a
+// player victim (Spell::CheckRange with the victim's combat reach).
+func (h *Handler) checkSpellTargetPlayer(s *Session, st *castState, v pvpSnapshot, strict bool) uint8 {
+	info, p := st.info, s.player
+	if info.EquippedItemClass == 2 && !h.weaponFits(s, info) {
+		return spell.FailedEquippedItemClass
+	}
+	dx, dy, dz := float64(v.x-p.X), float64(v.y-p.Y), float64(v.z-p.Z)
+	centres := float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
+	reach := float32(defaultCombatReach) + 1.5 + baseMeleeRangeOffset
+	switch info.RangeIndex {
+	case 0, spellRangeSelfOnly, spellRangeAnywhere:
+	case spellRangeCombat:
+		mod := float32(0)
+		if !strict {
+			mod = 5
+		}
+		r := reach + mod
+		if r < attackDistance {
+			r = attackDistance
+		}
+		if centres > r {
+			return spell.FailedOutOfRange
+		}
+	default:
+		rg, ok := h.Data.SpellRange(info.RangeIndex)
+		if !ok {
+			break
+		}
 		dist := centres - reach
 		if dist < 0 {
 			dist = 0
@@ -535,6 +607,10 @@ func (h *Handler) foeFor(s *Session, v creatureView) *foeAuras {
 func (h *Handler) doAllEffectOnTarget(s *Session, now time.Time, st *castState, t *spellTarget) {
 	info, p := st.info, s.player
 	caster := uint64(p.GUID)
+	if t.guid>>32 == 0 && t.guid != caster {
+		h.doAllEffectOnPlayerTarget(s, now, st, t)
+		return
+	}
 	v, ok := h.lookupCreature(s, t.guid, now)
 	if !ok || !v.alive {
 		return
@@ -555,7 +631,19 @@ func (h *Handler) doAllEffectOnTarget(s *Session, now time.Time, st *castState, 
 		switch info.Effect[i] {
 		case gamedata.EffectSchoolDamage:
 			if !t.launched {
-				damage += spell.EffectValue(info, i, uint32(p.Level), irand)
+				v := spell.EffectValue(info, i, uint32(p.Level), irand)
+				v = spell.ComboScaled(info, i, v, int32(s.sp().comboPoints))
+				damage += v
+			}
+		case gamedata.EffectAddComboPoints:
+			if !t.launched {
+				h.addComboPoints(s, t.guid, uint8(max(spell.EffectValue(info, i, uint32(p.Level), irand), 1)))
+			}
+		case gamedata.EffectInterruptCast:
+			// Creatures do not cast; the player path is in pvp.go.
+		case gamedata.EffectLeap:
+			if !t.launched {
+				h.effectLeap(s, t.guid, v.x, v.y, v.z)
 			}
 		case gamedata.EffectWeaponDamageNoSchool, gamedata.EffectWeaponDamage, gamedata.EffectNormalizedWeaponDmg, gamedata.EffectWeaponPercentDamage:
 			weaponBased = true
@@ -595,7 +683,7 @@ func (h *Handler) doAllEffectOnTarget(s *Session, now time.Time, st *castState, 
 		d = h.calcSpellDamage(s, info, v, &fa.set, damage, weaponBased)
 	}
 	h.absorbResistBlock(s, info, v, &d, false)
-	_ = s.send(codec.SpellNonMeleeDamageLog(codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID), caster, info.ID, d.damage, uint8(info.SchoolMask), d.absorb, d.resist, false, d.blocked, d.hitInfo))
+	h.sendToSet(s, codec.SpellNonMeleeDamageLog(codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID), caster, info.ID, d.damage, uint8(info.SchoolMask), d.absorb, d.resist, false, d.blocked, d.hitInfo))
 	if d.damage > 0 {
 		h.dealCreatureDamage(s, v, d.damage, now)
 	}
@@ -605,6 +693,22 @@ func (h *Handler) doAllEffectOnTarget(s *Session, now time.Time, st *castState, 
 // spell leaves the caster, the hit lands after the travel time.
 func (h *Handler) launch(s *Session, now time.Time, st *castState, t *spellTarget) {
 	info, p := st.info, s.player
+	if t.guid>>32 == 0 && t.guid != uint64(p.GUID) {
+		// Player victims: roll at launch like HandleDelayedSpellLaunch.
+		snap, ok := h.pvpLookup(uint32(t.guid))
+		if !ok || t.miss != combat.SpellMissNone {
+			return
+		}
+		var damage int32
+		for i := 0; i < 3; i++ {
+			if t.effectMask&(1<<i) != 0 && info.Effect[i] == gamedata.EffectSchoolDamage {
+				damage += spell.EffectValue(info, i, uint32(p.Level), irand)
+			}
+		}
+		d := h.calcSpellDamagePlayer(s, info, snap, damage, false)
+		t.launched, t.damage, t.hitInfo = true, d.damage, d.hitInfo
+		return
+	}
 	v, ok := h.lookupCreature(s, t.guid, now)
 	if !ok || t.miss != combat.SpellMissNone {
 		return
@@ -628,6 +732,25 @@ func (h *Handler) resolveHits(s *Session, now time.Time, st *castState, list []*
 		if t.self {
 			if !h.noUnitTargets(info) {
 				hit = append(hit, t.guid)
+			}
+			continue
+		}
+		// Player victims (PvP).
+		if t.guid>>32 == 0 && t.guid != uint64(s.player.GUID) {
+			snap, ok := h.pvpLookup(uint32(t.guid))
+			if !ok || snap.ghost || snap.health == 0 {
+				continue
+			}
+			t.miss = h.spellHitResultPlayer(s, st, snap)
+			if info.Speed > 0 {
+				dx, dy, dz := float64(snap.x-s.player.X), float64(snap.y-s.player.Y), float64(snap.z-s.player.Z)
+				dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+				t.delay = time.Duration(dist / float64(info.Speed) * float64(time.Second))
+			}
+			if t.miss == combat.SpellMissNone {
+				hit = append(hit, t.guid)
+			} else {
+				miss = append(miss, codec.SpellMissEntry{Target: t.guid, Reason: uint8(t.miss)})
 			}
 			continue
 		}
@@ -690,7 +813,7 @@ func (h *Handler) addFoeAura(s *Session, now time.Time, st *castState, v creatur
 	if _, ok := fa.set.Add(hd); !ok {
 		return
 	}
-	h.syncFoeFields(s, v, fa)
+	h.foeAuraAdd(v, hd)
 	_ = s.send(codec.SetExtraAuraInfoNeedUpdate(codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID), hd.Slot, hd.SpellID, uint32(hd.MaxDuration), uint32(hd.Duration)))
 }
 
@@ -703,38 +826,21 @@ func foeSimulated(name uint32) bool {
 	return false
 }
 
-// clearFoeAuras ports Unit::RemoveAllAurasOnDeath for the auras this
-// player put on a creature: the foe entry is dropped and the cleared
-// UNIT_FIELD_AURA* words are broadcast, so no aura icons stay on the corpse.
+// clearFoeAuras ports Unit::RemoveAllAurasOnDeath for the creature: the
+// foe entry is dropped and the cleared UNIT_FIELD_AURA* words are broadcast,
+// so no aura icons stay on the corpse for any client.
 func (h *Handler) clearFoeAuras(s *Session, v creatureView) {
 	sp := s.spells
 	if sp == nil {
 		return
 	}
-	fa, ok := sp.foes[v.ref.GUID]
-	if !ok {
+	if _, ok := sp.foes[v.ref.GUID]; !ok {
+		// Another attacker's session may already have cleared the shared set.
+		h.foeAuraClearAll(v)
 		return
 	}
 	delete(sp.foes, v.ref.GUID)
-	fa.set = aura.Set{}
-	h.syncFoeFields(s, v, fa)
-}
-
-// syncFoeFields broadcasts the creature's changed UNIT_FIELD_AURA* words.
-func (h *Handler) syncFoeFields(s *Session, v creatureView, fa *foeAuras) {
-	want := h.auraWords(&fa.set)
-	var ch []codec.FieldChange
-	for idx, val := range want {
-		if fa.sent[idx] != val {
-			fa.sent[idx] = val
-			ch = append(ch, codec.FieldChange{Index: idx, Value: val})
-		}
-	}
-	if len(ch) == 0 {
-		return
-	}
-	pkt := codec.ValuesUpdate(codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID), ch)
-	h.broadcastCreature(v.ref, pkt, time.Now())
+	h.foeAuraClearAll(v)
 }
 
 // foeTick ports Aura::PeriodicTick (SPELL_AURA_PERIODIC_DAMAGE) for the
@@ -745,6 +851,9 @@ func (h *Handler) foeTick(s *Session, now time.Time) {
 		v, ok := h.lookupCreature(s, codec.CreatureGUID(fa.ref.Data.ID, fa.ref.GUID), now)
 		if !ok {
 			delete(sp.foes, guid)
+			h.creatureAuras.mu.Lock()
+			delete(h.creatureAuras.m, guid)
+			h.creatureAuras.mu.Unlock()
 			continue
 		}
 		if !v.alive {
@@ -763,10 +872,10 @@ func (h *Handler) foeTick(s *Session, now time.Time) {
 			continue
 		}
 		fa.at = now
-		expired := false
 		for _, e := range fa.set.Update(diff) {
 			if e.Kind == aura.Expired {
-				expired = true
+				// The merged creature display loses exactly this holder.
+				h.foeAuraRemove(v, e.Holder.SpellID, e.Holder.Caster)
 				continue
 			}
 			eff := e.Holder.Effects[e.Effect]
@@ -777,9 +886,6 @@ func (h *Handler) foeTick(s *Session, now time.Time) {
 			if cv, ok := h.lookupCreature(s, codec.CreatureGUID(fa.ref.Data.ID, fa.ref.GUID), now); !ok || !cv.alive {
 				break
 			}
-		}
-		if expired {
-			h.syncFoeFields(s, v, fa)
 		}
 	}
 }
@@ -804,7 +910,7 @@ func (h *Handler) periodicDamage(s *Session, now time.Time, v creatureView, fa *
 		d.damage = combat.ArmorReduced(uint32(hd.Level), h.victimArmor(v, &fa.set), d.damage)
 	}
 	h.absorbResistBlock(s, &gamedata.SpellInfo{ID: info.ID, SchoolMask: info.SchoolMask, DefenseType: gamedata.DamageClassMagic}, v, &d, true)
-	_ = s.send(codec.PeriodicDamageLog(codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID), hd.Caster, info.ID, d.damage, info.SchoolMask, d.absorb, d.resist))
+	h.sendToSet(s, codec.PeriodicDamageLog(codec.CreatureGUID(v.ref.Data.ID, v.ref.GUID), hd.Caster, info.ID, d.damage, info.SchoolMask, d.absorb, d.resist))
 	if d.damage > 0 {
 		h.dealCreatureDamage(s, v, d.damage, now)
 	}

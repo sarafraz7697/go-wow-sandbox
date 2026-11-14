@@ -46,6 +46,8 @@ type Handler struct {
 	active                      map[uint64]*activeConn
 	motion                      creatureMotion // runtime creature movement (creaturemotion.go)
 	life                        lifeRegistry   // runtime creature health/death/respawn (combat.go)
+	creatureAuras               creatureAuraRegistry // merged creature aura display (creatureauras.go)
+	pvp                         pvpRegistry         // live player combat state + event inboxes (pvp.go)
 }
 
 // activeConn tracks one admitted account so a duplicate connection can

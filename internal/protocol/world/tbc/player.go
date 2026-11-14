@@ -81,12 +81,15 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	h.normalizeLoadedPlayer(s, player)
 	loginAt := time.Now()
 	h.restoreSpellState(s, player, loginAt)
-	player.Stats, err = characterstats.Calculate(player, h.Data)
+	h.applyPassiveAuras(s)
+	h.applyEquipAuras(s)
+	h.applyGhostStateAtLogin(s, player)
+	mods := s.sp().auras.StatMods()
+	player.Stats, err = characterstats.Calculate(player, h.Data, &mods)
 	if err != nil {
 		s.log.Warn("player stat calculation failed", "error", err)
 		return fail()
 	}
-	applyAuraStats(player.Stats, s.spells.auras.StatMods())
 	h.snapshotSpellState(s, player, loginAt)
 	if len(player.Stats.Limitations) > 0 {
 		s.log.Warn("player stats use base and equipment calculation", "limitations", player.Stats.Limitations)
@@ -129,6 +132,9 @@ func (h *Handler) playerLogin(ctx context.Context, s *Session, p world.Packet) (
 	// broadcasts in future slices.
 	h.registerInWorld(s, player)
 	h.sendAuraState(s)
+	if player.PlayerFlags&playerFlagsGhost != 0 {
+		_ = s.send(codec.DeathReleaseLoc(player.HomeMap, player.HomeX, player.HomeY, player.HomeZ))
+	}
 	// The player is now InWorld. An initial time-sync send failure is not
 	// fatal; the tick loop retries on the next cadence.
 	if syncErr := h.sendTimeSync(s); syncErr != nil {
@@ -149,6 +155,11 @@ func (h *Handler) releasePlayer(ctx context.Context, s *Session) error {
 	if s.player.Entered {
 		h.snapshotSpellState(s, s.player, time.Now())
 	}
+	// The session's creature auras leave the merged display with it.
+	if s.spells != nil {
+		h.foeAuraPurgeCaster(uint64(s.player.GUID))
+	}
+	h.pvpUnregister(s)
 	if err := h.Players.ReleasePlayer(ctx, s.account.ID, s.player, seconds); err != nil {
 		return err
 	}
@@ -248,9 +259,12 @@ func (h *Handler) registerInWorld(s *Session, p *character.Player) {
 		PlayerBytes2: p.PlayerBytes2,
 		VisibleItems: visibleItems,
 	}
+	s.unitFlags = codec.PlayerUnitFlags
+	h.pvpRegister(s)
 	sender := &sessionSender{send: s.send, trySend: s.trySend}
 	if err := h.Broadcast.Register(presence, sender); err != nil {
 		s.log.Warn("world registration failed; broadcasts disabled for this session", "guid", p.GUID, "error", err)
+		h.pvpUnregister(s)
 		return
 	}
 	// Spawn flow: tell nearby players about the new player, and tell the new
@@ -311,6 +325,11 @@ func (h *Handler) playerTick(ctx context.Context, s *Session) error {
 	now := time.Now()
 	// Combat swings run on every (fast) tick; the rest at the 250 ms cadence.
 	h.combatTick(s, now)
+	// Cross-session combat: apply queued events, publish the live snapshot and
+	// keep the UNIT_FLAG_IN_COMBAT bit in sync.
+	h.drainPvpEvents(s, now)
+	h.pvpUpdateSnapshot(s)
+	h.combatFlagTick(s, now)
 	if now.Before(s.slowAt) {
 		return nil
 	}

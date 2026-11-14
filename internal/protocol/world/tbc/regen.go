@@ -63,7 +63,7 @@ func (h *Handler) regenTick(s *Session, now time.Time) {
 	}
 	p.Mana, p.Rage, p.Focus, p.Energy, p.Happiness = st.Power[0], st.Power[1], st.Power[2], st.Power[3], st.Power[4]
 	if len(ch) > 0 {
-		_ = s.send(codec.ValuesUpdate(uint64(p.GUID), ch))
+		h.sendFields(s, ch...)
 	}
 }
 
@@ -76,13 +76,17 @@ func (h *Handler) refreshStats(s *Session) {
 		return
 	}
 	old := p.Stats
-	ns, err := stats.Calculate(p, h.Data)
+	if s.spells != nil {
+		h.applyEquipAuras(s) // rebuild the passive equipment holders first
+	}
+	mods := aura.StatMods{}
+	if s.spells != nil {
+		mods = s.spells.auras.StatMods()
+	}
+	ns, err := stats.Calculate(p, h.Data, &mods)
 	if err != nil {
 		s.log.Warn("stat recompute failed", "guid", p.GUID, "error", err)
 		return
-	}
-	if s.spells != nil {
-		applyAuraStats(ns, s.spells.auras.StatMods())
 	}
 	p.Stats = ns
 	var ch []codec.FieldChange
@@ -142,7 +146,7 @@ func (h *Handler) refreshStats(s *Session) {
 	}
 	// Combat ratings and the derived character-sheet percentages.
 	for cr, v := range ns.Ratings {
-		if v != 0 {
+		if old.Ratings[cr] != v {
 			set(f.PLAYER_FIELD_COMBAT_RATING_1+cr, uint32(v))
 		}
 	}

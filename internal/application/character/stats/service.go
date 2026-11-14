@@ -4,6 +4,7 @@ package stats
 
 import (
 	"fmt"
+	"wowserver/internal/domain/aura"
 	"wowserver/internal/domain/character"
 	"wowserver/internal/gamedata"
 )
@@ -78,7 +79,7 @@ func AddItemStatRating(kind uint32, amount int32, ratings *[24]int32) bool {
 	return true
 }
 
-func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, error) {
+func Calculate(p *character.Player, data *gamedata.Catalog, mods *aura.StatMods) (*character.Stats, error) {
 	level, ok := data.Level(uint32(p.Race), uint32(p.Class), uint32(p.Level))
 	if !ok {
 		return nil, fmt.Errorf("%w: no level stats for race=%d class=%d level=%d", character.ErrPlayerUnsupported, p.Race, p.Class, p.Level)
@@ -167,12 +168,7 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 				s.AttackTime[i] = details.Delay
 			}
 		}
-		for _, spell := range details.Spells {
-			if spell.SpellID != 0 && spell.SpellTrigger == 1 {
-				limit("item equip spell auras")
-			}
-		}
-		if details.ItemSet != 0 {
+			if details.ItemSet != 0 {
 			limit("item set bonuses")
 		}
 		for i := 0; i < 11; i++ {
@@ -196,7 +192,9 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 					continue
 				}
 				switch effect {
-				case 0, 1: // empty or on-hit proc (does not change idle stats)
+				case 0: // empty
+				case 1: // ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL: proc
+					limit("enchantment proc effects")
 				case 2:
 					if item.Slot >= 15 && item.Slot <= 17 {
 						damageBonus[item.Slot-15] += float32(amount)
@@ -205,6 +203,7 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 					if arg < 7 {
 						s.Resistances[arg] += amount
 					}
+				case 3: // ITEM_ENCHANTMENT_TYPE_SPELL: applied by the caller
 				case 5:
 					addStat(arg, int32(amount))
 				default:
@@ -213,8 +212,22 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 			}
 		}
 	}
+	if mods != nil {
+		for i := 0; i < 5; i++ {
+			values[i] += int64(mods.Pos[i]) - int64(mods.Neg[i])
+			s.Positive[i] += mods.Pos[i]
+			s.Negative[i] += mods.Neg[i]
+		}
+		for cr, v := range mods.Ratings {
+			ratings[cr] += v
+		}
+	}
 	for i, v := range values {
-		s.Attributes[i] = uint32(max(v, 0))
+		attr := float64(max(v, 0))
+		if mods != nil && mods.StatPct[i] != 0 {
+			attr *= float64(mods.StatPct[i])
+		}
+		s.Attributes[i] = uint32(max(attr, 0))
 	}
 	// ---- combat ratings and derived sheet values (StatSystem.cpp) ----
 	playerLevel := uint32(p.Level)
@@ -279,12 +292,28 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 	// UpdateExpertise: the CR_EXPERTISE rating bonus for both hands.
 	s.Expertise = int32(rb(gamedata.CRExpertise))
 	stamina, intellect := int64(s.Attributes[2]), int64(s.Attributes[3])
-	s.MaxHealth = uint32(max(1, int64(base.Health)+health+min(stamina, 20)+max(stamina-20, 0)*10))
+	maxHealth := int64(base.Health) + health + min(stamina, 20) + max(stamina-20, 0)*10
+	if mods != nil {
+		maxHealth += int64(mods.MaxHealth)
+		if mods.MaxHealthPct != 0 {
+			maxHealth = int64(float64(maxHealth) * float64(mods.MaxHealthPct))
+		}
+	}
+	s.MaxHealth = uint32(max(maxHealth, 1))
 	if base.Mana > 0 {
 		s.MaxMana = uint32(max(0, int64(base.Mana)+mana+min(intellect, 20)+max(intellect-20, 0)*15))
 	}
 	strength, agility, lvl := int32(s.Attributes[0]), int32(s.Attributes[1]), int32(p.Level)
 	s.Resistances[0] += s.Attributes[1] * 2
+	if mods != nil {
+		for i := range s.Resistances {
+			v := float64(int64(s.Resistances[i]) + int64(mods.Resist[i]))
+			if mods.ResistPct[i] != 0 {
+				v *= float64(mods.ResistPct[i])
+			}
+			s.Resistances[i] = uint32(max(v, 0))
+		}
+	}
 	s.ShieldBlock = uint32(max(0, int32(s.ShieldBlock)+strength/20-1))
 	s.RangedAttackPower = agility - 10
 	switch p.Class {
@@ -305,6 +334,18 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 	case 1, 4:
 		s.RangedAttackPower += lvl
 	}
+	if mods != nil {
+		ap := float64(s.AttackPower) + float64(mods.AttackPower)
+		if mods.AttackPowerPct != 0 {
+			ap *= float64(mods.AttackPowerPct)
+		}
+		s.AttackPower = int32(ap)
+		rap := float64(s.RangedAttackPower) + float64(mods.RangedAttackPower)
+		if mods.RangedAttackPowerPct != 0 {
+			rap *= float64(mods.RangedAttackPowerPct)
+		}
+		s.RangedAttackPower = int32(rap)
+	}
 	for i := 0; i < 3; i++ {
 		if i > 0 && !weapon[i] {
 			continue
@@ -320,7 +361,7 @@ func Calculate(p *character.Player, data *gamedata.Catalog) (*character.Stats, e
 			s.DamageMax[i] *= 0.5
 		}
 	}
-	// Passive racial/class spells and persisted auras are not yet evaluated.
-	limit("passive spells, talents, buffs and forms are not evaluated")
+	// Passive spells, item equip spells, talents and buffs arrive through
+	// the aura modifiers; forms are not implemented yet.
 	return s, nil
 }

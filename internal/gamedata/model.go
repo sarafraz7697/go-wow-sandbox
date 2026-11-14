@@ -8,8 +8,8 @@
 package gamedata
 
 import (
-	"sync"
 	"sort"
+	"sync"
 
 	"wowserver/internal/entity"
 )
@@ -93,18 +93,18 @@ type GameObjectSpawnRef struct {
 type Creature struct{ ID, Family uint32 }
 
 type ClientData struct {
-	Cooldowns    []SpellCooldown
-	Factions     []Faction
+	Cooldowns []SpellCooldown
+	Factions  []Faction
 	// FactionTemplates carries every row of FactionTemplate.dbc.
 	FactionTemplates []FactionTemplate
-	Enchantments []Enchantment
-	Items        []ClientItem
-	Races        []Race
-	Classes      []Class
-	Maps         []Map
-	Pairs        []Pair
-	Outfits      []Outfit
-	SpellIDs     []uint32
+	Enchantments     []Enchantment
+	Items            []ClientItem
+	Races            []Race
+	Classes          []Class
+	Maps             []Map
+	Pairs            []Pair
+	Outfits          []Outfit
+	SpellIDs         []uint32
 	// AreaTriggers carries every row of AreaTrigger.dbc. The catalog filters
 	// this against the dataset's areatrigger_tavern rows to keep only the
 	// inn/tavern volumes.
@@ -141,59 +141,89 @@ type outfitKey struct {
 	Gender, ID uint8
 }
 type Catalog struct {
-	maxLevel uint32 // highest level stored in the progression tables
-	catOnce sync.Once
-	byCat   map[uint32][]uint32 // spell category -> spell ids (sSpellCategoryStore)
-	meleeCritBase, meleeCritRatio []float32
-	spellCritBase, spellCritRatio []float32
-	combatRatings []float32
+	maxLevel                              uint32 // highest level stored in the progression tables
+	catOnce                               sync.Once
+	byCat                                 map[uint32][]uint32 // spell category -> spell ids (sSpellCategoryStore)
+	meleeCritBase, meleeCritRatio         []float32
+	spellCritBase, spellCritRatio         []float32
+	combatRatings                         []float32
 	regenHP, regenHPSpirit, regenMPSpirit []float32
-	spellInfo map[uint32]*SpellInfo
-	castTimes map[uint32]CastTime
-	durations map[uint32]Duration
-	spellRanges map[uint32]SpellRange
-	cooldowns         map[uint32]SpellCooldown
-	itemPrototypes    map[uint32]entity.ItemPrototype
-	factionIndices    map[uint32]int32
-	factions          map[uint32]Faction
-	factionTemplates  map[uint32]FactionTemplate
-	vendorItems       map[uint32][]entity.VendorItem
-	vendorTemplates   map[uint32][]entity.VendorItem
-	creatureByGUID    map[uint32]int
-	conditions        map[uint32]entity.PlayerCondition
-	enchantments      map[uint32]Enchantment
-	creatures         map[uint32]Creature
-	creatureTemplates map[uint32]entity.CreatureInfo
-	goTemplates       map[uint32]entity.GameObjectInfo
-	quests            map[uint32]*entity.Quest
-	creatureModels    map[uint32]entity.CreatureModelInfo
-	classLevelStats   map[entity.CreatureClassLevelKey]entity.CreatureClassLvlStats
-	creatureSpawns    []CreatureSpawnRef
-	goSpawns          []GameObjectSpawnRef
-	spatial           *spatialIndex
-	skippedZeroItems  int
-	races             map[uint32]Race
-	classes           map[uint32]Class
-	maps              map[uint32]Map
-	pairs             map[Pair]bool
-	starts            map[Pair]Start
-	outfits           map[outfitKey]Outfit
-	spells            map[uint32]bool
-	startItems        map[Pair][]StartItem
-	startSpells       map[Pair][]uint32
-	actions           map[Pair][]Action
-	levels            map[levelKey]Level
-	classLevels       map[classLevelKey]ClassLevel
-	xp                map[uint32]uint32
-	reserved          map[string]bool
-	taverns           map[uint32]TavernTrigger
-	summary           Summary
+	spellInfo                             map[uint32]*SpellInfo
+	castTimes                             map[uint32]CastTime
+	durations                             map[uint32]Duration
+	spellRanges                           map[uint32]SpellRange
+	cooldowns                             map[uint32]SpellCooldown
+	itemPrototypes                        map[uint32]entity.ItemPrototype
+	factionIndices                        map[uint32]int32
+	factions                              map[uint32]Faction
+	factionTemplates                      map[uint32]FactionTemplate
+	vendorItems                           map[uint32][]entity.VendorItem
+	vendorTemplates                       map[uint32][]entity.VendorItem
+	creatureByGUID                        map[uint32]int
+	conditions                            map[uint32]entity.PlayerCondition
+	enchantments                          map[uint32]Enchantment
+	creatures                             map[uint32]Creature
+	creatureTemplates                     map[uint32]entity.CreatureInfo
+	goTemplates                           map[uint32]entity.GameObjectInfo
+	quests                                map[uint32]*entity.Quest
+	creatureModels                        map[uint32]entity.CreatureModelInfo
+	classLevelStats                       map[entity.CreatureClassLevelKey]entity.CreatureClassLvlStats
+	creatureSpawns                        []CreatureSpawnRef
+	goSpawns                              []GameObjectSpawnRef
+	spatial                               *spatialIndex
+	skippedZeroItems                      int
+	races                                 map[uint32]Race
+	classes                               map[uint32]Class
+	maps                                  map[uint32]Map
+	pairs                                 map[Pair]bool
+	starts                                map[Pair]Start
+	outfits                               map[outfitKey]Outfit
+	spells                                map[uint32]bool
+	startItems                            map[Pair][]StartItem
+	startSpells                           map[Pair][]uint32
+	actions                               map[Pair][]Action
+	levels                                map[levelKey]Level
+	classLevels                           map[classLevelKey]ClassLevel
+	xp                                    map[uint32]uint32
+	reserved                              map[string]bool
+	taverns                               map[uint32]TavernTrigger
+	summary                               Summary
 }
 
 func (c *Catalog) Summary() Summary              { return c.summary }
 func (c *Catalog) Race(id uint32) (Race, bool)   { v, ok := c.races[id]; return v, ok }
 func (c *Catalog) Class(id uint32) (Class, bool) { v, ok := c.classes[id]; return v, ok }
 func (c *Catalog) Map(id uint32) (Map, bool)     { v, ok := c.maps[id]; return v, ok }
+
+// SetRaceForTest installs one ChrRaces row (tests).
+func (c *Catalog) SetRaceForTest(id uint32, v Race) {
+	if c.races == nil {
+		c.races = map[uint32]Race{}
+	}
+	v.ID = id
+	c.races[id] = v
+}
+
+// SetLevelForTest installs one player level stats row and the max level (tests).
+func (c *Catalog) SetLevelForTest(race, class, level, maxLevel uint32, v Level) {
+	if c.levels == nil {
+		c.levels = map[levelKey]Level{}
+	}
+	v.Pair, v.Level = Pair{race, class}, level
+	c.levels[levelKey{Pair{race, class}, level}] = v
+	if maxLevel > 0 {
+		c.maxLevel = maxLevel
+	}
+}
+
+// SetClassLevelForTest installs one class level stats row (tests).
+func (c *Catalog) SetClassLevelForTest(class, level uint32, v ClassLevel) {
+	if c.classLevels == nil {
+		c.classLevels = map[classLevelKey]ClassLevel{}
+	}
+	v.Class, v.Level = class, level
+	c.classLevels[classLevelKey{class, level}] = v
+}
 func (c *Catalog) TavernTrigger(id uint32) (TavernTrigger, bool) {
 	v, ok := c.taverns[id]
 	return v, ok
@@ -206,6 +236,7 @@ func (c *Catalog) Outfit(race, class uint32, gender, id uint8) (Outfit, bool) {
 	v, ok := c.outfits[outfitKey{Pair{race, class}, gender, id}]
 	return v, ok
 }
+
 // Level ports ObjectMgr::GetPlayerLevelInfo: levels above the stored table
 // are extrapolated from the last stored level (BuildPlayerLevelInfo).
 func (c *Catalog) Level(race, class, level uint32) (Level, bool) {
@@ -562,7 +593,7 @@ func (c *Catalog) RatingBonus(cr, level uint32, rating int32) float32 {
 // dodgeBase and dodgeCritMul are the hardcoded tables of
 // Player::GetDodgeFromAgility, indexed by class-1.
 var (
-	dodgeBase   = [11]float32{0.0075, 0.00652, -0.0545, -0.0059, 0.03183, 0.0114, 0.0167, 0.034575, 0.02011, 0, -0.0187}
+	dodgeBase    = [11]float32{0.0075, 0.00652, -0.0545, -0.0059, 0.03183, 0.0114, 0.0167, 0.034575, 0.02011, 0, -0.0187}
 	dodgeCritMul = [11]float32{1.1, 1.0, 1.6, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0, 1.7}
 )
 

@@ -49,9 +49,12 @@ type spellState struct {
 	auraAt       time.Time
 	sentFields   map[int]uint32 // aura update fields the client already has
 	warned       map[uint32]bool
+	equipAuras   map[uint32]bool     // passive spell ids applied from equipment
 	foes         map[uint32]*foeAuras // auras the player put on creatures, by spawn guid
 	delayed      []*delayedSpell      // spells still travelling to their targets
 	melee        *castState           // CURRENT_MELEE_SPELL (next swing ability)
+	comboTarget  uint64               // combo point target (m_comboTargetGuid)
+	comboPoints  uint8                // combo points on the target
 }
 
 func (s *Session) sp() *spellState {
@@ -74,6 +77,9 @@ func (h *Handler) registerSpellRoutes(add func(uint32, handlerFunc)) {
 	add(op.CMSG_CANCEL_CAST, h.cancelCast)
 	add(op.CMSG_CANCEL_AURA, h.cancelAura)
 	add(op.CMSG_STANDSTATECHANGE, h.standStateChange)
+	add(op.CMSG_REPOP_REQUEST, h.repopRequest)
+	add(op.CMSG_RESURRECT_RESPONSE, h.resurrectResponse)
+	add(op.CMSG_SPIRIT_HEALER_ACTIVATE, h.spiritHealerActivate)
 }
 
 // CMSG_CAST_SPELL: uint32 spell, uint8 cast count, SpellCastTargets.
@@ -166,7 +172,8 @@ func (h *Handler) cancelCast(_ context.Context, s *Session, p world.Packet) (*wo
 		old := s.spells.melee
 		s.spells.melee = nil
 		caster := uint64(s.player.GUID)
-		_ = s.send(codec.SpellFailure(caster, id, 0), codec.SpellFailedOther(caster, id))
+		h.sendToSet(s, codec.SpellFailure(caster, id, 0))
+		h.sendToSet(s, codec.SpellFailedOther(caster, id))
 		_ = s.send(codec.CastFailed(id, spell.FailedInterrupted, old.count))
 		return nil, nil
 	}
@@ -185,7 +192,8 @@ func (h *Handler) cancelCurrent(s *Session) {
 	if st.info.StartRecoveryCategory != 0 || st.info.StartRecoveryTime != 0 {
 		delete(s.spells.gcd, st.info.StartRecoveryCategory) // CancelGlobalCooldown
 	}
-	_ = s.send(codec.SpellFailure(caster, st.info.ID, 0), codec.SpellFailedOther(caster, st.info.ID))
+	h.sendToSet(s, codec.SpellFailure(caster, st.info.ID, 0))
+	h.sendToSet(s, codec.SpellFailedOther(caster, st.info.ID))
 	_ = s.send(codec.CastFailed(st.info.ID, spell.FailedInterrupted, st.count))
 }
 
@@ -225,7 +233,8 @@ func (h *Handler) standStateChange(_ context.Context, s *Session, p world.Packet
 // standing up removes the auras that require sitting.
 func (h *Handler) setStandState(s *Session, state uint8) {
 	s.sitting = state != codec.StandStateStand
-	_ = s.send(codec.ValuesUpdate(uint64(s.player.GUID), []codec.FieldChange{{Index: f.UNIT_FIELD_BYTES_1, Value: uint32(state)}}))
+	s.bytes1 = s.bytes1&^0xFF | uint32(state)
+	h.sendToSet(s, codec.ValuesUpdate(uint64(s.player.GUID), []codec.FieldChange{{Index: f.UNIT_FIELD_BYTES_1, Value: s.bytes1}}))
 	if !s.sitting && s.spells != nil {
 		h.removeAurasWithInterrupt(s, gamedata.AuraInterruptNotSeated)
 	}
@@ -274,7 +283,7 @@ func (h *Handler) prepareSpell(s *Session, now time.Time, info *gamedata.SpellIn
 		}
 		sp.melee = st
 		caster := uint64(s.player.GUID)
-		_ = s.send(codec.SpellStart(caster, caster, info.ID, count, castMS, tg))
+		h.sendToSet(s, codec.SpellStart(caster, caster, info.ID, count, castMS, tg))
 		if info.StartRecoveryTime > 0 {
 			sp.gcd[info.StartRecoveryCategory] = now.Add(time.Duration(info.StartRecoveryTime) * time.Millisecond)
 		}
@@ -287,7 +296,7 @@ func (h *Handler) prepareSpell(s *Session, now time.Time, info *gamedata.SpellIn
 		if it != nil {
 			source = codec.ItemGUID(it.guid)
 		}
-		_ = s.send(codec.SpellStart(source, caster, info.ID, count, castMS, tg))
+		h.sendToSet(s, codec.SpellStart(source, caster, info.ID, count, castMS, tg))
 		// TriggerGlobalCooldown
 		if it == nil && info.StartRecoveryTime > 0 {
 			sp.gcd[info.StartRecoveryCategory] = now.Add(time.Duration(info.StartRecoveryTime) * time.Millisecond)
@@ -303,7 +312,7 @@ func (h *Handler) prepareSpell(s *Session, now time.Time, info *gamedata.SpellIn
 // checkCast is the subset of Spell::CheckCast the supported spells need.
 func (h *Handler) checkCast(s *Session, now time.Time, st *castState) uint8 {
 	info, sp, p := st.info, s.sp(), s.player
-	if p.Health == 0 {
+	if p.Health == 0 || p.PlayerFlags&playerFlagsGhost != 0 {
 		return spell.FailedCasterDead
 	}
 	if info.Attributes&gamedata.SpellAttrRanged != 0 {
@@ -374,9 +383,59 @@ func (h *Handler) spellTick(s *Session, now time.Time) {
 	if sp.cast != nil && !now.Before(sp.cast.deadline) {
 		h.castNow(s, now, sp.cast)
 	}
+	// Expired cooldowns leave the maps (cooldown housekeeping).
+	for id, end := range sp.cooldowns {
+		if !now.Before(end) {
+			delete(sp.cooldowns, id)
+		}
+	}
+	for cat, end := range sp.catCooldowns {
+		if !now.Before(end) {
+			delete(sp.catCooldowns, cat)
+		}
+	}
+	for cat, end := range sp.gcd {
+		if !now.Before(end) {
+			delete(sp.gcd, cat)
+		}
+	}
 	h.auraTick(s, now)
 	h.foeTick(s, now)
 	h.delayedTick(s, now)
+}
+
+// clearCooldown removes one spell cooldown and informs the client
+// (SpellCooldownMgr::RemoveSpellCooldown with update).
+func (h *Handler) clearCooldown(s *Session, id uint32) {
+	delete(s.sp().cooldowns, id)
+	_ = s.send(codec.ClearCooldownPacket(id, uint64(s.player.GUID)))
+}
+
+// prohibitSpellSchool ports Player::ProhibitSpellSchool: every known spell of
+// the school is locked for the duration and one SMSG_SPELL_COOLDOWN informs
+// the client (the spell school lockout of interrupt effects).
+func (h *Handler) prohibitSpellSchool(s *Session, schoolMask uint32, ms uint32) {
+	now := time.Now()
+	end := now.Add(time.Duration(ms) * time.Millisecond)
+	sp := s.sp()
+	var entries []codec.CooldownEntry
+	for _, id := range s.player.Spells {
+		info := h.Data.Spell(id)
+		if info == nil || info.Attributes&gamedata.SpellAttrDisabledWhileActive != 0 {
+			continue
+		}
+		if info.SchoolMask&schoolMask == 0 {
+			continue
+		}
+		if cur, ok := sp.cooldowns[id]; ok && cur.After(end) {
+			continue
+		}
+		sp.cooldowns[id] = end
+		entries = append(entries, codec.CooldownEntry{Spell: id, Remain: ms})
+	}
+	if len(entries) > 0 {
+		_ = s.send(codec.SpellCooldownPacket(uint64(s.player.GUID), entries))
+	}
 }
 
 // castNow ports Spell::cast for a spell whose timer ran out.
@@ -399,6 +458,9 @@ func (h *Handler) castNow(s *Session, now time.Time, st *castState) {
 	}
 	h.startCooldowns(s, now, st)
 	h.takePower(s, now, st)
+	if st.info.Attributes&gamedata.SpellAttrExReqTargetComboPoints != 0 || st.info.AttributesEx&(gamedata.SpellAttrExReqTargetComboPoints|gamedata.SpellAttrExReqComboPoints) != 0 {
+		h.clearComboPoints(s) // finishers spend every point on the target
+	}
 	caster := uint64(s.player.GUID)
 	source := caster
 	if st.item != nil {
@@ -406,8 +468,8 @@ func (h *Handler) castNow(s *Session, now time.Time, st *castState) {
 	}
 	targets := h.fillTargets(s, now, st)
 	hit, miss := h.resolveHits(s, now, st, targets)
-	_ = s.send(codec.ClearExtraAuraInfo(caster, st.info.ID),
-		codec.SpellGoMiss(source, caster, st.info.ID, uint32(now.UnixMilli()), hit, miss, st.targets))
+	_ = s.send(codec.ClearExtraAuraInfo(caster, st.info.ID))
+	h.sendToSet(s, codec.SpellGoMiss(source, caster, st.info.ID, uint32(now.UnixMilli()), hit, miss, st.targets))
 	if st.info.Speed > 0 {
 		for _, t := range targets {
 			if !t.self {
@@ -473,7 +535,7 @@ func (h *Handler) startCooldowns(s *Session, now time.Time, st *castState) {
 	if rec == 0 && catrec == 0 {
 		return
 	}
-	ms := func(v int32) time.Duration { return time.Duration(v/1000) * time.Second }
+	ms := func(v int32) time.Duration { return time.Duration(v) * time.Millisecond }
 	var catEnd, recEnd time.Time
 	if catrec > 0 {
 		catEnd = now.Add(ms(catrec))
@@ -501,6 +563,7 @@ func (h *Handler) takePower(s *Session, now time.Time, st *castState) {
 	if st.info.PowerType == spell.PowerHealth {
 		p.Health = sub(p.Health, cost)
 		h.sendFields(s, codec.FieldChange{Index: f.UNIT_FIELD_HEALTH, Value: p.Health})
+		h.checkPlayerDeath(s, uint64(p.GUID), now)
 		return
 	}
 	if st.info.PowerType >= 5 || cost == 0 {
@@ -543,8 +606,24 @@ func (h *Handler) setPower(s *Session, i int, v uint32) {
 	h.sendFields(s, codec.FieldChange{Index: f.UNIT_FIELD_POWER1 + i, Value: v})
 }
 
+// sendFields routes value changes like the reference update pipeline: unit
+// (public) fields are broadcast to every player that sees this one (UpdateData
+// udata1), player fields go to the owning client only (udata2).
 func (h *Handler) sendFields(s *Session, ch ...codec.FieldChange) {
-	_ = s.send(codec.ValuesUpdate(uint64(s.player.GUID), ch))
+	var pub, own []codec.FieldChange
+	for _, c := range ch {
+		if int(c.Index) < f.PLAYER_QUEST_LOG_1_1 {
+			pub = append(pub, c)
+		} else {
+			own = append(own, c)
+		}
+	}
+	if len(pub) > 0 {
+		h.sendToSet(s, codec.ValuesUpdate(uint64(s.player.GUID), pub))
+	}
+	if len(own) > 0 {
+		_ = s.send(codec.ValuesUpdate(uint64(s.player.GUID), own))
+	}
 }
 
 // applyEffects runs the effects of a cast on the caster (the only unit target).
@@ -564,7 +643,7 @@ func (h *Handler) applyEffects(s *Session, now time.Time, st *castState, mask ui
 			if v < 0 {
 				v = 0
 			}
-			_ = s.send(codec.SpellHealLog(caster, caster, info.ID, uint32(v), false))
+			h.sendToSet(s, codec.SpellHealLog(caster, caster, info.ID, uint32(v), false))
 			if np := min(p.Health+uint32(v), p.Stats.MaxHealth); np != p.Health {
 				p.Health = np
 				h.sendFields(s, codec.FieldChange{Index: f.UNIT_FIELD_HEALTH, Value: np})
@@ -576,7 +655,7 @@ func (h *Handler) applyEffects(s *Session, now time.Time, st *castState, mask ui
 			if v <= 0 || pw < 0 || pw >= 5 || rs.MaxPower[pw] == 0 {
 				continue
 			}
-			_ = s.send(codec.SpellEnergizeLog(caster, caster, info.ID, uint32(pw), uint32(v)))
+			h.sendToSet(s, codec.SpellEnergizeLog(caster, caster, info.ID, uint32(pw), uint32(v)))
 			h.setPower(s, int(pw), min(rs.Power[pw]+uint32(v), rs.MaxPower[pw]))
 		case gamedata.EffectApplyAura:
 			e := &aura.Effect{Name: info.Aura[i], Amount: spell.EffectValue(info, i, uint32(p.Level), irand), Misc: info.MiscValue[i]}
@@ -587,6 +666,27 @@ func (h *Handler) applyEffects(s *Session, now time.Time, st *castState, mask ui
 			hasAura = true
 		case gamedata.EffectTeleportUnits:
 			h.effectTeleportUnits(s, info, i)
+		case gamedata.EffectHealPct:
+			pct := spell.EffectValue(info, i, uint32(p.Level), irand)
+			if pct > 0 {
+				v := p.Stats.MaxHealth * uint32(pct) / 100
+				_ = s.send(codec.SpellHealLog(caster, caster, info.ID, v, false))
+				if np := min(p.Health+v, p.Stats.MaxHealth); np != p.Health {
+					p.Health = np
+					h.sendFields(s, codec.FieldChange{Index: f.UNIT_FIELD_HEALTH, Value: np})
+				}
+			}
+		case gamedata.EffectEnergizePct:
+			pct := spell.EffectValue(info, i, uint32(p.Level), irand)
+			pw := info.MiscValue[i]
+			rs := h.regenState(s, now)
+			if pct > 0 && pw >= 0 && pw < 5 && rs.MaxPower[pw] > 0 {
+				v := rs.MaxPower[pw] * uint32(pct) / 100
+				h.sendToSet(s, codec.SpellEnergizeLog(caster, caster, info.ID, uint32(pw), v))
+				h.setPower(s, int(pw), min(rs.Power[pw]+v, rs.MaxPower[pw]))
+			}
+		case gamedata.EffectDummy:
+			h.warnOnce(s, info.ID<<2|uint32(i), "dummy effect not simulated", info.ID, 0)
 		case gamedata.EffectScriptEffect:
 			// Spell::EffectScriptEffect has no case for these spells (e.g. 8690).
 		default:
